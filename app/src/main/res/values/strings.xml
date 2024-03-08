@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">WarThunderMapDraw</string>
+    <string-array name="SelectMach">
+        <item>TANKS</item>
+        <item>PLANES</item>
+    </string-array>
+    <string-array name="TankMap">
+        <item>Map1</item>
+        <item>Map2</item>
+    </string-array>
+    <string-array name="PlaneMap">
+        <item>Map3</item>
+        <item>Map4</item>
+    </string-array>
+</resources>
