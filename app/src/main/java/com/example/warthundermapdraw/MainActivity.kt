@@ -26,7 +26,7 @@ class MainActivity : AppCompatActivity() {
         val layoutFilesWithoutPrefix = ArrayList<String>()
 
         for (filename in layoutFiles) {
-            Log.d("cos","cos2")
+
             val nameWithoutPrefix = filename.replaceFirst(Regex("^map_\\d{3}+px-maplayout_"), "").replace(Regex("_ab[rbsb]?\\.jpg$"),"")
             layoutFilesWithoutPrefix.add(nameWithoutPrefix)
 
@@ -58,7 +58,7 @@ class MainActivity : AppCompatActivity() {
             val resEntries = resources.assets.list("drawable")
             resEntries?.let { entries ->
                 for (entry in entries) {
-                    Log.d("cos11","cos")
+
                     layoutFilesList.add(entry)
                 }
             }
