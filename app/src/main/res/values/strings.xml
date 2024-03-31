@@ -7,5 +7,83 @@
         <item>Break</item>
         <item>Skirmish</item>
     </string-array>
-
+    <string-array name="SelectMap">
+        <item>map_250px_maplayout_conquest1_Advance To The Rhine_abrbsb.jpg</item>
+        <item>map_250px_maplayout_conquest2_Advance To The Rhine_abrbsb.jpg</item>
+        <item>map_250px_maplayout_conquest3_Advance To The Rhine_abrbsb.jpg</item>
+        <item>map_250px_maplayout_conquest4_Advance To The Rhine_abrbsb.jpg</item>
+        <item>map_300px_maplayout_battle_Abandoned Factory_abrb.jpg</item>
+        <item>map_300px_maplayout_battle_Advance To The Rhine_abrbsb.jpg</item>
+        <item>map_300px_maplayout_battle_Alaska_abrbsb.jpg</item>
+        <item>map_300px_maplayout_battle_American Desert_abrbsb.jpg</item>
+        <item>map_300px_maplayout_battle_Ardennes_abrbsb.jpg</item>
+        <item>map_300px_maplayout_battle_Ash River_abrbsb.jpg</item>
+        <item>map_300px_maplayout_battle_Cargo Port_abrbsb.jpg</item>
+        <item>map_300px_maplayout_battle_Carpathians_abrb.jpg</item>
+        <item>map_300px_maplayout_battle_Eastern Europe_abrb.jpg</item>
+        <item>map_300px_maplayout_battle_European Province_abrbsb.jpg</item>
+        <item>map_300px_maplayout_battle_Fields Of Normandy_abrbsb.jpg</item>
+        <item>map_300px_maplayout_battle_Fields Of Poland_abrbsb.jpg</item>
+        <item>map_300px_maplayout_battle_Finland_abrbsb.jpg</item>
+        <item>map_300px_maplayout_battle_Fulda_rbsb.jpg</item>
+        <item>map_300px_maplayout_battle_Hurtgen Forest_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest1_Abandoned Factory_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest1_Alaska_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest1_American Desert_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest1_Ardennes_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest1_Ash River_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest1_Cargo Port_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest1_Carpathians_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest1_Eastern Europe_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest1_European Province_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest1_Fields Of Normandy_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest1_Fields Of Poland_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest1_Finland_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest1_Fulda_rbsb.jpg</item>
+        <item>map_300px_maplayout_conquest1_Hurtgen Forest_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest2_Abandoned Factory_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest2_Alaska_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest2_American Desert_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest2_Ardennes_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest2_Ash River_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest2_Cargo Port_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest2_Carpathians_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest2_Eastern Europe_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest2_European Province_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest2_Fields Of Normandy_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest2_Fields Of Poland_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest2_Finland_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest2_Fulda_rbsb.jpg</item>
+        <item>map_300px_maplayout_conquest2_Hurtgen Forest_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest3_Abandoned Factory_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest3_Alaska_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest3_American Desert_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest3_Ardennes_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest3_Ash River_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest3_Cargo Port_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest3_Carpathians_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest3_Eastern Europe_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest3_European Province_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest3_Fields Of Normandy_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest3_Fields Of Poland_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest3_Finland_abrbsb.jpg</item>
+        <item>map_300px_maplayout_conquest3_Fulda_rbsb.jpg</item>
+        <item>map_300px_maplayout_conquest3_Hurtgen Forest_abrb.jpg</item>
+        <item>map_300px_maplayout_conquest4_Hurtgen Forest_abrb.jpg</item>
+        <item>map_300px_maplayout_domination_Abandoned Factory_abrb.jpg</item>
+        <item>map_300px_maplayout_domination_Advance To The Rhine_abrbsb.jpg</item>
+        <item>map_300px_maplayout_domination_Alaska_abrbsb.jpg</item>
+        <item>map_300px_maplayout_domination_American Desert_abrbsb.jpg</item>
+        <item>map_300px_maplayout_domination_Ardennes_abrb.jpg</item>
+        <item>map_300px_maplayout_domination_Ash River_abrbsb.jpg</item>
+        <item>map_300px_maplayout_domination_Cargo Port_abrbsb.jpg</item>
+        <item>map_300px_maplayout_domination_Carpathians_abrb.jpg</item>
+        <item>map_300px_maplayout_domination_Eastern Europe_abrb.jpg</item>
+        <item>map_300px_maplayout_domination_European Province_abrbsb.jpg</item>
+        <item>map_300px_maplayout_domination_Fields Of Normandy_abrbsb.jpg</item>
+        <item>map_300px_maplayout_domination_Fields Of Poland_abrbsb.jpg</item>
+        <item>map_300px_maplayout_domination_Finland_abrbsb.jpg</item>
+        <item>map_300px_maplayout_domination_Fulda_rbsb.jpg</item>
+        <item>map_300px_maplayout_domination_Hurtgen Forest_abrb.jpg</item>
+    </string-array>
 </resources>

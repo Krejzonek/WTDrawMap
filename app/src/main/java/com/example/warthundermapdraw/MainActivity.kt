@@ -1,5 +1,7 @@
 package com.example.warthundermapdraw
 
+import android.content.Context
+import android.content.res.AssetManager
 import android.content.res.Resources
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
@@ -10,6 +12,7 @@ import android.widget.ArrayAdapter
 import android.widget.Spinner
 import java.io.File
 import java.io.IOException
+import java.lang.Exception
 
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -21,19 +24,35 @@ class MainActivity : AppCompatActivity() {
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, options)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         spinnerMach.adapter = adapter
-        val layoutFiles = getLayoutFilesFromDrawableFolder()
+
+
+        val layoutFilesList = resources.getStringArray(R.array.SelectMap)
+
+        /*al files = File("D:\\WarThunderMapDraw\\app\\src\\main\\res\\drawable").listFiles()
+        if(files != null){
+            Log.d("drawable",files.size.toString())
+        }
+        else{
+            Log.d("drawable","null")
+        }
+        if (files != null) {
+            for (file in files) {
+                if (file.isFile && file.name.startsWith("map_")) {
+                    layoutFilesList.add(file.name)
+                }
+            }
+        }*/
 
         val layoutFilesWithoutPrefix = ArrayList<String>()
-
-        for (filename in layoutFiles) {
-
-            val nameWithoutPrefix = filename.replaceFirst(Regex("^map_\\d{3}+px-maplayout_"), "").replace(Regex("_ab[rbsb]?\\.jpg$"),"")
+        for (filename in layoutFilesList) {
+            val nameWithoutPrefix = filename.replace(Regex("map_\\d{3}px_maplayout_"), "").replaceAfterLast("_","").replace("_"," ")
+            Log.d("drawable",nameWithoutPrefix)
             layoutFilesWithoutPrefix.add(nameWithoutPrefix)
-
         }
-        val mapAdapter = ArrayAdapter(this,android.R.layout.simple_spinner_item,layoutFilesWithoutPrefix)
+
+        val mapAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, layoutFilesWithoutPrefix)
         mapAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        spinnerMap.adapter=mapAdapter
+        spinnerMap.adapter = mapAdapter
        /*spinnerMach.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val selectedOption = options[position]
@@ -50,21 +69,7 @@ class MainActivity : AppCompatActivity() {
 
             }
         }*/
-
     }
-    private fun getLayoutFilesFromDrawableFolder(): Array<String> {
-        val layoutFilesList = ArrayList<String>()
-        try {
-            val resEntries = resources.assets.list("drawable")
-            resEntries?.let { entries ->
-                for (entry in entries) {
 
-                    layoutFilesList.add(entry)
-                }
-            }
-        } catch (e: IOException) {
-            e.printStackTrace()
-        }
-        return layoutFilesList.toTypedArray()
-    }
+
 }
