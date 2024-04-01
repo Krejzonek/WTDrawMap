@@ -9,6 +9,7 @@ import android.util.Log
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
+import android.widget.ImageView
 import android.widget.Spinner
 import java.io.File
 import java.io.IOException
@@ -28,34 +29,37 @@ class MainActivity : AppCompatActivity() {
 
         val layoutFilesList = resources.getStringArray(R.array.SelectMap)
 
-        /*al files = File("D:\\WarThunderMapDraw\\app\\src\\main\\res\\drawable").listFiles()
-        if(files != null){
-            Log.d("drawable",files.size.toString())
+        val filesPath = ArrayList<String>()
+        for (file in layoutFilesList){
+           val filePath = file.lowercase().replace(" ","")
+            filesPath.add(filePath)
         }
-        else{
-            Log.d("drawable","null")
-        }
-        if (files != null) {
-            for (file in files) {
-                if (file.isFile && file.name.startsWith("map_")) {
-                    layoutFilesList.add(file.name)
-                }
-            }
-        }*/
 
         val layoutFilesWithoutPrefix = ArrayList<String>()
         for (filename in layoutFilesList) {
             val nameWithoutPrefix = filename.replace(Regex("map_\\d{3}px_maplayout_"), "").replaceAfterLast("_","").replace("_"," ")
-            Log.d("drawable",nameWithoutPrefix)
             layoutFilesWithoutPrefix.add(nameWithoutPrefix)
         }
+        val image = findViewById<ImageView>(R.id.Map)
 
         val mapAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, layoutFilesWithoutPrefix)
         mapAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         spinnerMap.adapter = mapAdapter
-       /*spinnerMach.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+       spinnerMap.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val selectedOption = options[position]
+                val selectedItemId = position
+
+
+
+                val resourcesId = resources.getIdentifier(filesPath[selectedItemId],"drawable",packageName)
+                Log.d("drawable",resourcesId.toString())
+                if(resourcesId != 0){
+                    image.setImageResource(resourcesId)
+                }
+                else{
+                    Log.e("Error","Image not found")
+                }
+               /* val selectedOption = options[position]
                 val optionsMap = when(selectedOption){
                     "TANKS" -> resources.getStringArray(R.array.TankMap)
                     "PLANES" -> resources.getStringArray(R.array.PlaneMap)
@@ -63,12 +67,12 @@ class MainActivity : AppCompatActivity() {
                 }
                 val adapterMap = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_item, optionsMap)
                 adapterMap.setDropDownViewResource(android.R.layout.simple_spinner_item)
-                spinnerMap.adapter = adapterMap
+                spinnerMap.adapter = adapterMap*/
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {
 
             }
-        }*/
+        }
     }
 
 
