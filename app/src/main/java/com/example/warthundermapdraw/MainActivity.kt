@@ -48,18 +48,18 @@ class MainActivity : AppCompatActivity() {
        spinnerMap.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val selectedItemId = position
+                val filePath = filesPath[selectedItemId].replaceAfterLast(".","").replace(".","")
 
 
+                val resourcesId = resources.getIdentifier(filePath,"drawable",packageName)
 
-                val resourcesId = resources.getIdentifier(filesPath[selectedItemId],"drawable",packageName)
-                Log.d("drawable",resourcesId.toString())
                 if(resourcesId != 0){
                     image.setImageResource(resourcesId)
                 }
                 else{
                     Log.e("Error","Image not found")
                 }
-               /* val selectedOption = options[position]
+                /*val selectedOption = options[position]
                 val optionsMap = when(selectedOption){
                     "TANKS" -> resources.getStringArray(R.array.TankMap)
                     "PLANES" -> resources.getStringArray(R.array.PlaneMap)
@@ -68,6 +68,20 @@ class MainActivity : AppCompatActivity() {
                 val adapterMap = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_item, optionsMap)
                 adapterMap.setDropDownViewResource(android.R.layout.simple_spinner_item)
                 spinnerMap.adapter = adapterMap*/
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {
+
+            }
+        }
+        spinnerMach.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                var typ = spinnerMach.selectedItem.toString()
+                typ = typ.lowercase()
+                for (name in layoutFilesWithoutPrefix){
+                    if(typ in name){
+                        
+                    }
+                }
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {
 
