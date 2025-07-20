@@ -1,93 +1,97 @@
 package com.example.warthundermapdraw
 
-import android.content.Context
-import android.content.res.AssetManager
-import android.content.res.Resources
-import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.util.Log
 import android.view.View
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
-import android.widget.ImageView
-import android.widget.Spinner
-import java.io.File
-import java.io.IOException
-import java.lang.Exception
+import android.widget.*
+import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
+
+    private lateinit var spinnerMach: Spinner
+    private lateinit var spinnerMap: Spinner
+    private lateinit var image: ImageView
+
+    private lateinit var allMapNames: Array<String>
+    private val displayMapNames = mutableListOf<String>()
+    private val drawableFileNames = mutableListOf<String>()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        val spinnerMach: Spinner = findViewById(R.id.SelectMach)
-        val spinnerMap: Spinner = findViewById(R.id.SelectMap)
-        val options = resources.getStringArray(R.array.SelectMach)
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, options)
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        spinnerMach.adapter = adapter
+
+        spinnerMach = findViewById(R.id.SelectMach)
+        spinnerMap = findViewById(R.id.SelectMap)
+        image = findViewById(R.id.Map)
 
 
-        val layoutFilesList = resources.getStringArray(R.array.SelectMap)
+        val machineOptions = resources.getStringArray(R.array.SelectMach)
+        allMapNames = resources.getStringArray(R.array.SelectMap)
 
-        val filesPath = ArrayList<String>()
-        for (file in layoutFilesList){
-           val filePath = file.lowercase().replace(" ","")
-            filesPath.add(filePath)
-        }
 
-        val layoutFilesWithoutPrefix = ArrayList<String>()
-        for (filename in layoutFilesList) {
-            val nameWithoutPrefix = filename.replace(Regex("map_\\d{3}px_maplayout_"), "").replaceAfterLast("_","").replace("_"," ")
-            layoutFilesWithoutPrefix.add(nameWithoutPrefix)
-        }
-        val image = findViewById<ImageView>(R.id.Map)
+        val machAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, machineOptions)
+        machAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        spinnerMach.adapter = machAdapter
 
-        val mapAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, layoutFilesWithoutPrefix)
+
+        val mapAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, displayMapNames)
         mapAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         spinnerMap.adapter = mapAdapter
-       spinnerMap.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val selectedItemId = position
-                val filePath = filesPath[selectedItemId].replaceAfterLast(".","").replace(".","")
 
-
-                val resourcesId = resources.getIdentifier(filePath,"drawable",packageName)
-
-                if(resourcesId != 0){
-                    image.setImageResource(resourcesId)
-                }
-                else{
-                    Log.e("Error","Image not found")
-                }
-                /*val selectedOption = options[position]
-                val optionsMap = when(selectedOption){
-                    "TANKS" -> resources.getStringArray(R.array.TankMap)
-                    "PLANES" -> resources.getStringArray(R.array.PlaneMap)
-                    else -> arrayOf()
-                }
-                val adapterMap = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_item, optionsMap)
-                adapterMap.setDropDownViewResource(android.R.layout.simple_spinner_item)
-                spinnerMap.adapter = adapterMap*/
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {
-
-            }
-        }
         spinnerMach.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                var typ = spinnerMach.selectedItem.toString()
-                typ = typ.lowercase()
-                for (name in layoutFilesWithoutPrefix){
-                    if(typ in name){
-                        
+                val selectedMach = machineOptions[position].lowercase()
+
+
+                displayMapNames.clear()
+                drawableFileNames.clear()
+
+                for (mapName in allMapNames) {
+                    if (mapName.lowercase().contains(selectedMach)) {
+                        val displayName = mapName
+                            .replace(Regex("map_\\d{3}px_maplayout_"), "")
+                            .substringBeforeLast("_")
+                            .replace("_", " ")
+
+                        val drawableName = mapName.lowercase().replace(" ", "").replaceAfterLast(".", "").replace(".", "")
+                        displayMapNames.add(displayName)
+                        drawableFileNames.add(drawableName)
                     }
                 }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {
 
+                mapAdapter.notifyDataSetChanged()
+                if (displayMapNames.isNotEmpty()) {
+                    spinnerMap.setSelection(0)
+                    loadImageForSelectedMap(0)
+                } else {
+                    image.setImageDrawable(null)
+                }
             }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+       
+        spinnerMap.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                loadImageForSelectedMap(position)
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
     }
 
+    private fun loadImageForSelectedMap(position: Int) {
+        if (position in drawableFileNames.indices) {
+            val fileName = drawableFileNames[position]
+            val resId = resources.getIdentifier(fileName, "drawable", packageName)
 
+            if (resId != 0) {
+                image.setImageResource(resId)
+            } else {
+                Log.e("Error", "Nie znaleziono obrazka: $fileName")
+                image.setImageDrawable(null)
+            }
+        }
+    }
 }
