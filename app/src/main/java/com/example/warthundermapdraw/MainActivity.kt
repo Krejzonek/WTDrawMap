@@ -1,5 +1,6 @@
 package com.example.warthundermapdraw
 
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -11,7 +12,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var spinnerMach: Spinner
     private lateinit var spinnerMap: Spinner
     private lateinit var image: ImageView
-
+    private lateinit var edit: Button
     private lateinit var allMapNames: Array<String>
     private val displayMapNames = mutableListOf<String>()
     private val drawableFileNames = mutableListOf<String>()
@@ -24,10 +25,15 @@ class MainActivity : AppCompatActivity() {
         spinnerMap = findViewById(R.id.SelectMap)
         image = findViewById(R.id.Map)
 
-
+        edit = findViewById(R.id.Edit)
         val machineOptions = resources.getStringArray(R.array.SelectMach)
         allMapNames = resources.getStringArray(R.array.SelectMap)
 
+        edit.setOnClickListener{
+            val intent = Intent(this, MapViewActivity::class.java)
+            intent.putExtra("MAP_NAME", spinnerMap.selectedItem.toString())
+            startActivity(intent)
+        }
 
         val machAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, machineOptions)
         machAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
