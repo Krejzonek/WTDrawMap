@@ -32,14 +32,21 @@
             android:backgroundTint="@color/gray"
             android:text="Save" />
     </LinearLayout>
-
-    <ImageView
-        android:id="@+id/mapImageView"
+    <FrameLayout
+        android:id="@+id/mapFrame"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
-        android:adjustViewBounds="true"
-        app:srcCompat="@drawable/map_250px_maplayout_conquest1_advancetotherhine_abrbsb" />
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <ImageView
+            android:id="@+id/mapImageView"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:adjustViewBounds="true"
+            app:srcCompat="@drawable/map_250px_maplayout_conquest1_advancetotherhine_abrbsb" />
+
+    </FrameLayout>
 
     <View
         android:id="@+id/view2"
@@ -54,6 +61,37 @@
         android:orientation="horizontal">
 
 
+        <Button
+            android:id="@+id/draw"
+            style="@style/Widget.Material3.Button"
+            android:layout_width="wrap_content"
+            android:layout_height="60dp"
+
+            android:layout_weight="1"
+            android:backgroundTint="@color/black"
+            android:text="Draw"
+            app:icon="@drawable/pen"
+            app:iconGravity="textStart" />
+
+        <Button
+            android:id="@+id/Erser"
+            android:layout_width="wrap_content"
+            android:layout_height="60dp"
+            android:layout_weight="1"
+            android:backgroundTint="@color/black"
+            android:text="Clear"
+            app:icon="@drawable/eraser"
+            app:iconGravity="textStart" />
+
+        <Button
+        android:id="@+id/ClearAll"
+        android:layout_width="wrap_content"
+        android:layout_height="60dp"
+        android:layout_weight="1"
+        android:backgroundTint="@color/black"
+        android:text="Claer All"
+        app:icon="@drawable/eraser"
+        app:iconGravity="textStart" />
     </LinearLayout>
 
 

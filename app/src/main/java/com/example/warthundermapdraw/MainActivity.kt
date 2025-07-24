@@ -31,7 +31,8 @@ class MainActivity : AppCompatActivity() {
 
         edit.setOnClickListener{
             val intent = Intent(this, MapViewActivity::class.java)
-            intent.putExtra("MAP_NAME", spinnerMap.selectedItem.toString())
+            val position = spinnerMap.selectedItemPosition
+            intent.putExtra("MAP_NAME", drawableFileNames[position])
             startActivity(intent)
         }
 
