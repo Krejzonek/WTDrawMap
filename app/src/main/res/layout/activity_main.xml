@@ -43,14 +43,14 @@
         android:id="@+id/Edit"
         android:layout_width="wrap_content"
         android:layout_height="80dp"
-        android:text="Edytuj"
+        android:layout_gravity="center"
 
         android:backgroundTint="@color/black"
-        android:layout_gravity="center"
+        android:text="Edit"
         app:icon="@android:drawable/ic_menu_edit"
         app:iconGravity="textStart"
 
-        app:iconPadding="8dp"/>
+        app:iconPadding="8dp" />
 
     <View
         android:id="@+id/view"
@@ -61,14 +61,14 @@
     <Button
         android:id="@+id/Share"
         android:layout_width="wrap_content"
-        android:layout_gravity="center"
         android:layout_height="wrap_content"
-        android:textSize="13dp"
+        android:layout_gravity="center"
         android:layout_marginBottom="25dp"
-
-
         android:background="@drawable/plain"
 
-        android:text="Udostępnij"/>
+
+        android:text="Share"
+
+        android:textSize="13dp" />
 
 </LinearLayout>

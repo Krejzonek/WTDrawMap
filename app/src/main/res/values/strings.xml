@@ -6,6 +6,7 @@
         <item>Battle</item>
         <item>Break</item>
         <item>Skirmish</item>
+        <item>Saved</item>
     </string-array>
     <string-array name="SelectMap">
         <item>map_250px_maplayout_conquest1_Advance To The Rhine_abrbsb.jpg</item>
