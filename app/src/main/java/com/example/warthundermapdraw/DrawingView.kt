@@ -8,7 +8,7 @@ import android.view.View
 class DrawingView(context: Context) : View(context) {
     private var drawPath = Path()
     private var drawPaint = Paint().apply {
-        color = Color.RED
+        color = Color.BLUE
         isAntiAlias = true
         strokeWidth = 12f
         style = Paint.Style.STROKE
@@ -16,27 +16,34 @@ class DrawingView(context: Context) : View(context) {
         strokeCap = Paint.Cap.ROUND
     }
     var isDrawingEnabled = true
-    var isErasing = false
+    private var isEraserOn = false
     private var canvasBitmap: Bitmap? = null
     private var drawCanvas: Canvas? = null
-    private val drawColor = Color.RED
+
     private val erasePaint = Paint(drawPaint).apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
         strokeWidth = 36f
     }
 
-    private var isEraserOn = false
+    fun setColor(color: Int) {
+        drawPaint.color = color
+        isEraserOn = false
+        invalidate()
+    }
 
     fun setEraseMode(erase: Boolean) {
         isEraserOn = erase
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
         canvasBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        canvasBitmap?.eraseColor(Color.TRANSPARENT) // <-- Kluczowa linia!
         drawCanvas = Canvas(canvasBitmap!!)
     }
 
     override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
         canvas.drawBitmap(canvasBitmap!!, 0f, 0f, null)
         val paint = if (isEraserOn) erasePaint else drawPaint
         canvas.drawPath(drawPath, paint)
@@ -44,8 +51,10 @@ class DrawingView(context: Context) : View(context) {
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!isDrawingEnabled) return false
+
         val x = event.x
         val y = event.y
+
         when (event.action) {
             MotionEvent.ACTION_DOWN -> drawPath.moveTo(x, y)
             MotionEvent.ACTION_MOVE -> drawPath.lineTo(x, y)
@@ -58,18 +67,9 @@ class DrawingView(context: Context) : View(context) {
         invalidate()
         return true
     }
-    fun startDrawing() {
-        isDrawingEnabled = true
-        isErasing = false
-    }
 
-    fun stopDrawing() {
-        isDrawingEnabled = false
+    fun clearDrawing() {
+        canvasBitmap?.eraseColor(Color.TRANSPARENT)
+        invalidate()
     }
-
-    fun startErasing() {
-        isDrawingEnabled = true
-        isErasing = true
-    }
-
 }
