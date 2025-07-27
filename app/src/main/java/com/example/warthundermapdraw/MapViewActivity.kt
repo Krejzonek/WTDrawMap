@@ -135,9 +135,10 @@ class MapViewActivity : AppCompatActivity() {
 
     private fun saveDrawing(fileName: String) {
         val safeName = fileName.trim().replace("[^a-zA-Z0-9_]".toRegex(), "_")
-        val bitmap = Bitmap.createBitmap(mapFrame.width, mapFrame.height, Bitmap.Config.ARGB_8888)
+        val bitmap = Bitmap.createBitmap(imageView.width, imageView.height, Bitmap.Config.ARGB_8888)
         val canvas = android.graphics.Canvas(bitmap)
         mapFrame.draw(canvas)
+
 
         try {
             val file = File(filesDir, "saved_$safeName.png")

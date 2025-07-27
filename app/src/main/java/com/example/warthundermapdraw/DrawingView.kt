@@ -38,7 +38,7 @@ class DrawingView(context: Context) : View(context) {
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         canvasBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        canvasBitmap?.eraseColor(Color.TRANSPARENT) // <-- Kluczowa linia!
+        canvasBitmap?.eraseColor(Color.TRANSPARENT)
         drawCanvas = Canvas(canvasBitmap!!)
     }
 
