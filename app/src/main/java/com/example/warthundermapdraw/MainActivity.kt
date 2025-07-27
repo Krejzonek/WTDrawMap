@@ -104,8 +104,8 @@ class MainActivity : AppCompatActivity() {
 
             if (text == "Share") {
 
-                val currentMap = spinnerMap.selectedItem?.toString() ?: "brak mapy"
-                val tacticCode = "KOD_${currentMap.uppercase().replace(" ", "_")}"
+                val currentMap = spinnerMap.selectedItem?.toString() ?: "no map"
+                val tacticCode = "CODE_${currentMap.uppercase().replace(" ", "_")}"
 
                 val messageView = EditText(this).apply {
                     setText(tacticCode)
@@ -116,9 +116,8 @@ class MainActivity : AppCompatActivity() {
                     setPadding(60, 50, 60, 50)
                 }
 
-
                 val dialog = android.app.AlertDialog.Builder(this)
-                    .setTitle("Kod twojej taktyki")
+                    .setTitle("Your tactic code")
                     .setView(messageView)
                     .setPositiveButton("OK") { dialogInterface, _ ->
                         dialogInterface.dismiss()
@@ -128,18 +127,17 @@ class MainActivity : AppCompatActivity() {
 
             } else if (text == "Load") {
                 val input = EditText(this).apply {
-                    hint = "kod taktyki"
+                    hint = "tactic code"
                     textSize = 18f
                     setPadding(60, 50, 60, 50)
                 }
 
-
                 val dialog = android.app.AlertDialog.Builder(this)
-                    .setTitle("Podaj kod taktyki")
+                    .setTitle("Enter tactic code")
                     .setView(input)
                     .setPositiveButton("OK") { dialogInterface, _ ->
                         val enteredCode = input.text.toString()
-                        Toast.makeText(this, "Wprowadzony kod: $enteredCode", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "Entered code: $enteredCode", Toast.LENGTH_SHORT).show()
 
                         dialogInterface.dismiss()
                     }
@@ -147,6 +145,7 @@ class MainActivity : AppCompatActivity() {
                 dialog.show()
             }
         }
+
 
     }
 
