@@ -99,6 +99,55 @@ class MainActivity : AppCompatActivity() {
                 startActivity(intent)
             }
         }
+        share.setOnClickListener {
+            val text = share.text.toString()
+
+            if (text == "Share") {
+
+                val currentMap = spinnerMap.selectedItem?.toString() ?: "brak mapy"
+                val tacticCode = "KOD_${currentMap.uppercase().replace(" ", "_")}"
+
+                val messageView = EditText(this).apply {
+                    setText(tacticCode)
+                    isEnabled = false
+                    isFocusable = false
+                    setTextIsSelectable(true)
+                    textSize = 18f
+                    setPadding(60, 50, 60, 50)
+                }
+
+
+                val dialog = android.app.AlertDialog.Builder(this)
+                    .setTitle("Kod twojej taktyki")
+                    .setView(messageView)
+                    .setPositiveButton("OK") { dialogInterface, _ ->
+                        dialogInterface.dismiss()
+                    }
+                    .create()
+                dialog.show()
+
+            } else if (text == "Load") {
+                val input = EditText(this).apply {
+                    hint = "kod taktyki"
+                    textSize = 18f
+                    setPadding(60, 50, 60, 50)
+                }
+
+
+                val dialog = android.app.AlertDialog.Builder(this)
+                    .setTitle("Podaj kod taktyki")
+                    .setView(input)
+                    .setPositiveButton("OK") { dialogInterface, _ ->
+                        val enteredCode = input.text.toString()
+                        Toast.makeText(this, "Wprowadzony kod: $enteredCode", Toast.LENGTH_SHORT).show()
+
+                        dialogInterface.dismiss()
+                    }
+                    .create()
+                dialog.show()
+            }
+        }
+
     }
 
     private fun loadImageForSelectedMap(position: Int) {
