@@ -70,7 +70,18 @@ class MapViewActivity : AppCompatActivity() {
             drawingView?.clearDrawing()
         }
         back.setOnClickListener {
-            startActivity(Intent(this, MainActivity::class.java))
+            val builder = android.app.AlertDialog.Builder(this)
+            builder.setTitle("Confirm")
+            builder.setMessage("Are you sure you want to go back to the main screen?")
+            builder.setPositiveButton("Yes") { dialog, _ ->
+                dialog.dismiss()
+                startActivity(Intent(this, MainActivity::class.java))
+                finish()
+            }
+            builder.setNegativeButton("No") { dialog, _ ->
+                dialog.dismiss()
+            }
+            builder.create().show()
         }
         val colorButtons = findViewById<LinearLayout>(R.id.colorButtons)
         val colorRed = findViewById<View>(R.id.colorRed)
