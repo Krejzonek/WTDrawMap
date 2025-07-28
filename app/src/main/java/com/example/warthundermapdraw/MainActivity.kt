@@ -1,12 +1,16 @@
 package com.example.warthundermapdraw
 
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.util.Base64
 import android.util.Log
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import com.google.firebase.firestore.FirebaseFirestore
+import java.io.ByteArrayOutputStream
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
@@ -20,6 +24,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var allMapNames: Array<String>
     private val displayMapNames = mutableListOf<String>()
     private val drawableFileNames = mutableListOf<String>()
+
+    private val firestore by lazy { FirebaseFirestore.getInstance() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -99,54 +105,84 @@ class MainActivity : AppCompatActivity() {
                 startActivity(intent)
             }
         }
+
         share.setOnClickListener {
-            val text = share.text.toString()
+            if (share.text == "Share") {
+                shareCurrentMap()
+            } else {
+                loadSharedMap()
+            }
+        }
+    }
 
-            if (text == "Share") {
+    private fun shareCurrentMap() {
+        val position = spinnerMap.selectedItemPosition
+        if (position !in drawableFileNames.indices) return
+        Log.d("MainActivity", "shareCurrentMap() called")
+        Toast.makeText(this, "Start sharing", Toast.LENGTH_SHORT).show()
+        val fileName = drawableFileNames[position]
+        val file = File(filesDir, "$fileName.png")
+        if (!file.exists()) {
+            Toast.makeText(this, "Plik nie istnieje", Toast.LENGTH_SHORT).show()
+            return
+        }
 
-                val currentMap = spinnerMap.selectedItem?.toString() ?: "no map"
-                val tacticCode = "CODE_${currentMap.uppercase().replace(" ", "_")}"
+        val bitmap = BitmapFactory.decodeFile(file.absolutePath)
+        val baos = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
+        val encoded = Base64.encodeToString(baos.toByteArray(), Base64.DEFAULT)
 
-                val messageView = EditText(this).apply {
-                    setText(tacticCode)
-                    isEnabled = false
-                    isFocusable = false
-                    setTextIsSelectable(true)
-                    textSize = 18f
-                    setPadding(60, 50, 60, 50)
-                }
+        val code = "CODE_${System.currentTimeMillis()}"
+        val map = hashMapOf("image" to encoded)
 
+        firestore.collection("tactics").document(code).set(map)
+            .addOnSuccessListener {
                 val dialog = android.app.AlertDialog.Builder(this)
-                    .setTitle("Your tactic code")
-                    .setView(messageView)
-                    .setPositiveButton("OK") { dialogInterface, _ ->
-                        dialogInterface.dismiss()
-                    }
-                    .create()
-                dialog.show()
-
-            } else if (text == "Load") {
-                val input = EditText(this).apply {
-                    hint = "tactic code"
-                    textSize = 18f
-                    setPadding(60, 50, 60, 50)
-                }
-
-                val dialog = android.app.AlertDialog.Builder(this)
-                    .setTitle("Enter tactic code")
-                    .setView(input)
-                    .setPositiveButton("OK") { dialogInterface, _ ->
-                        val enteredCode = input.text.toString()
-                        Toast.makeText(this, "Entered code: $enteredCode", Toast.LENGTH_SHORT).show()
-
-                        dialogInterface.dismiss()
-                    }
+                    .setTitle("Tactic code")
+                    .setMessage("Twój kod to:\n\n$code")
+                    .setPositiveButton("OK", null)
                     .create()
                 dialog.show()
             }
+            .addOnFailureListener {
+                Toast.makeText(this, "Błąd przy zapisie", Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    private fun loadSharedMap() {
+        val input = EditText(this).apply {
+            hint = "Wprowadź kod"
+            textSize = 18f
+            setPadding(60, 50, 60, 50)
         }
 
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Wczytaj z kodu")
+            .setView(input)
+            .setPositiveButton("Wczytaj") { _, _ ->
+                val code = input.text.toString().trim()
+                if (code.isNotEmpty()) {
+                    firestore.collection("tactics").document(code).get()
+                        .addOnSuccessListener { doc ->
+                            val encoded = doc.getString("image")
+                            if (encoded != null) {
+                                val bytes = Base64.decode(encoded, Base64.DEFAULT)
+                                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                image.setImageBitmap(bitmap)
+                                Toast.makeText(this, "Taktika załadowana", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(this, "Nie znaleziono obrazu", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        .addOnFailureListener {
+                            Toast.makeText(this, "Niepowodzenie pobierania", Toast.LENGTH_SHORT).show()
+                        }
+                }
+            }
+            .setNegativeButton("Anuluj", null)
+            .create()
 
+        dialog.show()
     }
 
     private fun loadImageForSelectedMap(position: Int) {
@@ -159,17 +195,23 @@ class MainActivity : AppCompatActivity() {
             if (file.exists()) {
                 val bitmap = BitmapFactory.decodeFile(file.absolutePath)
                 image.setImageBitmap(bitmap)
+                edit.visibility = View.VISIBLE
+                share.visibility = View.VISIBLE
             } else {
-                Log.e("MainActivity", "Saved file not found: $fileName.png")
                 image.setImageDrawable(null)
+                edit.visibility = View.GONE
+                share.visibility = View.GONE
             }
         } else {
             val resId = resources.getIdentifier(fileName, "drawable", packageName)
             if (resId != 0) {
                 image.setImageResource(resId)
+                edit.visibility = View.VISIBLE
+                share.visibility = View.VISIBLE
             } else {
-                Log.e("MainActivity", "Drawable not found: $fileName")
                 image.setImageDrawable(null)
+                edit.visibility = View.GONE
+                share.visibility = View.GONE
             }
         }
     }
