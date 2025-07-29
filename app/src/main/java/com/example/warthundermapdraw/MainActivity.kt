@@ -3,13 +3,13 @@ package com.example.warthundermapdraw
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
 import android.util.Log
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
-import com.google.firebase.firestore.FirebaseFirestore
 import java.io.ByteArrayOutputStream
 import java.io.File
 
@@ -24,8 +24,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var allMapNames: Array<String>
     private val displayMapNames = mutableListOf<String>()
     private val drawableFileNames = mutableListOf<String>()
-
-    private val firestore by lazy { FirebaseFirestore.getInstance() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -113,42 +111,65 @@ class MainActivity : AppCompatActivity() {
                 loadSharedMap()
             }
         }
+
+
+        handleCustomLink(intent)
     }
 
-    private fun shareCurrentMap() {
-        val position = spinnerMap.selectedItemPosition
-        if (position !in drawableFileNames.indices) return
-        Log.d("MainActivity", "shareCurrentMap() called")
-        Toast.makeText(this, "Start sharing", Toast.LENGTH_SHORT).show()
-        val fileName = drawableFileNames[position]
-        val file = File(filesDir, "$fileName.png")
-        if (!file.exists()) {
-            Toast.makeText(this, "Plik nie istnieje", Toast.LENGTH_SHORT).show()
-            return
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleCustomLink(intent)
+    }
+
+
+    private fun handleCustomLink(intent: Intent?) {
+        val data: Uri = intent?.data ?: return
+        val encoded = data.getQueryParameter("img") ?: return
+
+        try {
+            val bytes = Base64.decode(encoded, Base64.DEFAULT)
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            val fileName = "from_link_${System.currentTimeMillis()}"
+            val file = File(filesDir, "saved_$fileName.png")
+            file.outputStream().use {
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+            Toast.makeText(this, "Mapa zaimportowana z linku", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Nieprawidłowy link lub dane", Toast.LENGTH_SHORT).show()
         }
-
-        val bitmap = BitmapFactory.decodeFile(file.absolutePath)
-        val baos = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
-        val encoded = Base64.encodeToString(baos.toByteArray(), Base64.DEFAULT)
-
-        val code = "CODE_${System.currentTimeMillis()}"
-        val map = hashMapOf("image" to encoded)
-
-        firestore.collection("tactics").document(code).set(map)
-            .addOnSuccessListener {
-                val dialog = android.app.AlertDialog.Builder(this)
-                    .setTitle("Tactic code")
-                    .setMessage("Twój kod to:\n\n$code")
-                    .setPositiveButton("OK", null)
-                    .create()
-                dialog.show()
-            }
-            .addOnFailureListener {
-                Toast.makeText(this, "Błąd przy zapisie", Toast.LENGTH_SHORT).show()
-            }
     }
+    private fun shareCurrentMap() {
+        try {
+            val position = spinnerMap.selectedItemPosition
+            if (position !in drawableFileNames.indices) return
 
+            val fileName = drawableFileNames[position]
+            val sourceFile = File(filesDir, "$fileName.png")
+            if (!sourceFile.exists()) {
+                Toast.makeText(this, "Plik nie istnieje", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            val uniqueId = "shared_${System.currentTimeMillis()}"
+            val targetFile = File(filesDir, "saved_$uniqueId.png")
+
+            sourceFile.copyTo(targetFile)
+
+            val link = "warthundermap://load?id=$uniqueId"
+
+            val sendIntent = Intent().apply {
+                action = Intent.ACTION_SEND
+                putExtra(Intent.EXTRA_TEXT, link)
+                type = "text/plain"
+            }
+            val shareIntent = Intent.createChooser(sendIntent, "Udostępnij mapę")
+            startActivity(shareIntent)
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Błąd udostępniania", e)
+            Toast.makeText(this, "Błąd: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+        }
+    }
     private fun loadSharedMap() {
         val input = EditText(this).apply {
             hint = "Wprowadź kod"
@@ -157,27 +178,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         val dialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Wczytaj z kodu")
+            .setTitle("Wczytaj z linku")
             .setView(input)
             .setPositiveButton("Wczytaj") { _, _ ->
-                val code = input.text.toString().trim()
-                if (code.isNotEmpty()) {
-                    firestore.collection("tactics").document(code).get()
-                        .addOnSuccessListener { doc ->
-                            val encoded = doc.getString("image")
-                            if (encoded != null) {
-                                val bytes = Base64.decode(encoded, Base64.DEFAULT)
-                                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                image.setImageBitmap(bitmap)
-                                Toast.makeText(this, "Taktika załadowana", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(this, "Nie znaleziono obrazu", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                        .addOnFailureListener {
-                            Toast.makeText(this, "Niepowodzenie pobierania", Toast.LENGTH_SHORT).show()
-                        }
-                }
+                val uri = Uri.parse(input.text.toString().trim())
+                handleCustomLink(Intent().setData(uri))
             }
             .setNegativeButton("Anuluj", null)
             .create()
