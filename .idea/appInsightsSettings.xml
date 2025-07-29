@@ -9,10 +9,10 @@
             <InsightsFilterSettings>
               <option name="connection">
                 <ConnectionSetting>
-                  <option name="appId" value="com.example.warthundermapdraw" />
-                  <option name="mobileSdkAppId" value="1:39386122984:android:f20a6491eef7acdb37575d" />
-                  <option name="projectId" value="wt-draw-map" />
-                  <option name="projectNumber" value="39386122984" />
+                  <option name="appId" value="PLACEHOLDER" />
+                  <option name="mobileSdkAppId" value="" />
+                  <option name="projectId" value="" />
+                  <option name="projectNumber" value="" />
                 </ConnectionSetting>
               </option>
               <option name="signal" value="SIGNAL_UNSPECIFIED" />
