@@ -54,6 +54,7 @@ class MainActivity : AppCompatActivity() {
                 drawableFileNames.clear()
 
                 if (selectedMach == "Saved") {
+
                     share.text = "Share"
                     val savedMaps = getSavedMaps()
                     for (name in savedMaps) {
@@ -61,6 +62,7 @@ class MainActivity : AppCompatActivity() {
                         drawableFileNames.add("saved_$name")
                     }
                 } else {
+
                     share.text = "Load"
                     for (mapName in allMapNames) {
                         if (mapName.lowercase().contains(selectedMach.lowercase())) {
@@ -172,7 +174,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun loadSharedMap() {
         val input = EditText(this).apply {
-            hint = "Wprowadź kod"
+            hint = "Wklej link"
             textSize = 18f
             setPadding(60, 50, 60, 50)
         }
