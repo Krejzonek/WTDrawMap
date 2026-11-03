@@ -10,7 +10,6 @@ import android.util.Log
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
-import java.io.ByteArrayOutputStream
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
@@ -20,6 +19,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var image: ImageView
     private lateinit var edit: Button
     private lateinit var share: Button
+    private lateinit var tacticalMap: ImageButton
+    private lateinit var sideMenu: LinearLayout
+    private lateinit var menuOverlay: View
+    private lateinit var drawMapOption: TextView
+    private lateinit var tacticMapOption: TextView
 
     private lateinit var allMapNames: Array<String>
     private val displayMapNames = mutableListOf<String>()
@@ -34,6 +38,30 @@ class MainActivity : AppCompatActivity() {
         image = findViewById(R.id.Map)
         edit = findViewById(R.id.Edit)
         share = findViewById(R.id.Share)
+        tacticalMap = findViewById(R.id.TacticalMap)
+        sideMenu = findViewById(R.id.SideMenu)
+        menuOverlay = findViewById(R.id.MenuOverlay)
+        drawMapOption = findViewById(R.id.DrawMapOption)
+        tacticMapOption = findViewById(R.id.TacticMapOption)
+
+        sideMenu.translationX = -280 * resources.displayMetrics.density
+
+        tacticalMap.setOnClickListener {
+            openMenu()
+        }
+
+        menuOverlay.setOnClickListener {
+            closeMenu()
+        }
+
+        drawMapOption.setOnClickListener {
+            closeMenu()
+        }
+
+        tacticMapOption.setOnClickListener {
+            closeMenu()
+            startActivity(Intent(this, TacticalMapActivity::class.java))
+        }
 
         val machineOptions = resources.getStringArray(R.array.SelectMach)
         allMapNames = resources.getStringArray(R.array.SelectMap)
@@ -54,7 +82,6 @@ class MainActivity : AppCompatActivity() {
                 drawableFileNames.clear()
 
                 if (selectedMach == "Saved") {
-
                     share.text = "Share"
                     val savedMaps = getSavedMaps()
                     for (name in savedMaps) {
@@ -62,7 +89,6 @@ class MainActivity : AppCompatActivity() {
                         drawableFileNames.add("saved_$name")
                     }
                 } else {
-
                     share.text = "Load"
                     for (mapName in allMapNames) {
                         if (mapName.lowercase().contains(selectedMach.lowercase())) {
@@ -114,7 +140,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-
         handleCustomLink(intent)
     }
 
@@ -123,6 +148,27 @@ class MainActivity : AppCompatActivity() {
         handleCustomLink(intent)
     }
 
+    private fun openMenu() {
+        sideMenu.visibility = View.VISIBLE
+        menuOverlay.visibility = View.VISIBLE
+        menuOverlay.alpha = 0f
+
+        menuOverlay.animate().alpha(1f).setDuration(200).start()
+        sideMenu.animate().translationX(0f).setDuration(200).start()
+    }
+
+    private fun closeMenu() {
+        menuOverlay.animate().alpha(0f).setDuration(200).withEndAction {
+            menuOverlay.visibility = View.GONE
+        }.start()
+
+        sideMenu.animate()
+            .translationX(-280 * resources.displayMetrics.density)
+            .setDuration(200)
+            .withEndAction {
+                sideMenu.visibility = View.GONE
+            }.start()
+    }
 
     private fun handleCustomLink(intent: Intent?) {
         val data: Uri = intent?.data ?: return
@@ -141,6 +187,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Nieprawidłowy link lub dane", Toast.LENGTH_SHORT).show()
         }
     }
+
     private fun shareCurrentMap() {
         try {
             val position = spinnerMap.selectedItemPosition
@@ -172,6 +219,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Błąd: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
         }
     }
+
     private fun loadSharedMap() {
         val input = EditText(this).apply {
             hint = "Wklej link"
