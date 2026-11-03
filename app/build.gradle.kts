@@ -42,6 +42,7 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.constraintlayout:constraintlayout:2.2.1")
     implementation("androidx.activity:activity:1.10.1")
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
