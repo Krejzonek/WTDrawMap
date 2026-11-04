@@ -1,13 +1,13 @@
 package com.example.warthundermapdraw
 
 import android.app.AlertDialog
-import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
+import android.view.MotionEvent
 import android.view.View
 import android.widget.*
 import androidx.activity.enableEdgeToEdge
@@ -16,8 +16,10 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.sqrt
 
 class MapViewActivity : AppCompatActivity() {
+
     private lateinit var mapName: String
     private lateinit var imageView: ImageView
     private lateinit var back: Button
@@ -25,10 +27,23 @@ class MapViewActivity : AppCompatActivity() {
     private lateinit var eraseButton: Button
     private lateinit var saveButton: Button
     private lateinit var mapFrame: FrameLayout
+    private lateinit var mapContent: FrameLayout
     private lateinit var clearAll: Button
-    private var drawingEnabled = false
+    private lateinit var zoomButton: Button
+    private lateinit var colorButtons: LinearLayout
+
     private var drawingView: DrawingView? = null
     private var isSavedMap = false
+    private var isDrawingMode = false
+    private var isZoomMode = false
+
+    private var currentZoom = 1f
+    private val minZoom = 1f
+    private val maxZoom = 8f
+
+    private var lastX = 0f
+    private var lastY = 0f
+    private var lastPinchDistance = 0f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,65 +65,195 @@ class MapViewActivity : AppCompatActivity() {
         eraseButton = findViewById(R.id.Erser)
         saveButton = findViewById(R.id.Save)
         mapFrame = findViewById(R.id.mapFrame)
+        mapContent = findViewById(R.id.mapContent)
+        clearAll = findViewById(R.id.ClearAll)
+        zoomButton = findViewById(R.id.Zoom)
+        colorButtons = findViewById(R.id.colorButtons)
 
         loadImage()
 
-        drawingView = DrawingView(this)
-        mapFrame.addView(drawingView)
+        mapContent.pivotX = 0f
+        mapContent.pivotY = 0f
 
+        drawingView = DrawingView(this)
+        mapContent.addView(drawingView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+
+        val colorRed = findViewById<View>(R.id.colorRed)
+        val colorGreen = findViewById<View>(R.id.colorGreen)
+        val colorBlue = findViewById<View>(R.id.colorBlue)
+
+        mapFrame.isClickable = true
+        mapFrame.setOnTouchListener { _, event ->
+            if (isZoomMode) {
+                handleZoomTouch(event)
+                true
+            } else {
+                false
+            }
+        }
+
+        drawButton.setOnClickListener {
+            isZoomMode = false
+            isDrawingMode = true
+            drawingView?.isDrawingEnabled = true
+            drawingView?.setEraseMode(false)
+            drawingView?.setColor(Color.BLUE)
+            colorButtons.visibility = View.VISIBLE
+            updateZoomButton()
+        }
 
         eraseButton.setOnClickListener {
-            drawingView?.setEraseMode(true)
-            drawingEnabled = false
+            if (isDrawingMode && !isZoomMode) {
+                drawingView?.isDrawingEnabled = true
+                drawingView?.setEraseMode(true)
+                colorButtons.visibility = View.GONE
+            } else {
+                Toast.makeText(this, "Press Draw first", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        colorRed.setOnClickListener {
+            drawingView?.setColor(Color.RED)
+            colorButtons.visibility = View.GONE
+        }
+
+        colorGreen.setOnClickListener {
+            drawingView?.setColor(Color.GREEN)
+            colorButtons.visibility = View.GONE
+        }
+
+        colorBlue.setOnClickListener {
+            drawingView?.setColor(Color.BLUE)
+            colorButtons.visibility = View.GONE
+        }
+
+        clearAll.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Clear all drawings?")
+                .setMessage("Are you sure you want to delete all drawings?")
+                .setPositiveButton("Clear") { _, _ ->
+                    drawingView?.clearDrawing()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+
+        zoomButton.setOnClickListener {
+            isZoomMode = !isZoomMode
+            drawingView?.isDrawingEnabled = isDrawingMode && !isZoomMode
+
+            if (isZoomMode) {
+                colorButtons.visibility = View.GONE
+            }
+
+            updateZoomButton()
         }
 
         saveButton.setOnClickListener {
             showSaveDialog()
         }
-        clearAll = findViewById(R.id.ClearAll)
-        clearAll.setOnClickListener{
-            drawingView?.clearDrawing()
-        }
+
         back.setOnClickListener {
-            val builder = android.app.AlertDialog.Builder(this)
-            builder.setTitle("Confirm")
-            builder.setMessage("Are you sure you want to go back to the main screen?")
-            builder.setPositiveButton("Yes") { dialog, _ ->
-                dialog.dismiss()
-                startActivity(Intent(this, MainActivity::class.java))
-                finish()
+            AlertDialog.Builder(this)
+                .setTitle("Confirm")
+                .setMessage("Are you sure you want to go back to the main screen?")
+                .setPositiveButton("Yes") { dialog, _ ->
+                    dialog.dismiss()
+                    startActivity(Intent(this, MainActivity::class.java))
+                    finish()
+                }
+                .setNegativeButton("No", null)
+                .show()
+        }
+    }
+
+    private fun updateZoomButton() {
+        zoomButton.text = if (isZoomMode) "Zoom: ON" else "Zoom"
+    }
+
+    private fun handleZoomTouch(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                lastX = event.x
+                lastY = event.y
+                lastPinchDistance = 0f
             }
-            builder.setNegativeButton("No") { dialog, _ ->
-                dialog.dismiss()
+
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                if (event.pointerCount >= 2) {
+                    lastPinchDistance = getPointerDistance(event)
+                }
             }
-            builder.create().show()
-        }
-        val colorButtons = findViewById<LinearLayout>(R.id.colorButtons)
-        val colorRed = findViewById<View>(R.id.colorRed)
-        val colorGreen = findViewById<View>(R.id.colorGreen)
-        val colorBlue = findViewById<View>(R.id.colorBlue)
 
-        drawButton.setOnClickListener {
-            drawingView?.setEraseMode(false)
-            drawingView?.setColor(Color.BLUE)
-            colorButtons.visibility = View.VISIBLE
-        }
+            MotionEvent.ACTION_MOVE -> {
+                if (event.pointerCount >= 2) {
+                    val distance = getPointerDistance(event)
 
-        colorRed.setOnClickListener {
-            drawingView?.setColor(android.graphics.Color.RED)
-            colorButtons.visibility = View.GONE
-        }
+                    if (lastPinchDistance > 0f) {
+                        val factor = distance / lastPinchDistance
+                        val focusX = (event.getX(0) + event.getX(1)) / 2f
+                        val focusY = (event.getY(0) + event.getY(1)) / 2f
 
-        colorGreen.setOnClickListener {
-            drawingView?.setColor(android.graphics.Color.GREEN)
-            colorButtons.visibility = View.GONE
-        }
+                        val newZoom = (currentZoom * factor).coerceIn(minZoom, maxZoom)
+                        val appliedFactor = newZoom / currentZoom
 
-        colorBlue.setOnClickListener {
-            drawingView?.setColor(android.graphics.Color.BLUE)
-            colorButtons.visibility = View.GONE
-        }
+                        mapContent.translationX = focusX - (focusX - mapContent.translationX) * appliedFactor
+                        mapContent.translationY = focusY - (focusY - mapContent.translationY) * appliedFactor
 
+                        currentZoom = newZoom
+                        applyMapTransform()
+                    }
+
+                    lastPinchDistance = distance
+                } else {
+                    val x = event.x
+                    val y = event.y
+
+                    mapContent.translationX += x - lastX
+                    mapContent.translationY += y - lastY
+
+                    lastX = x
+                    lastY = y
+
+                    applyMapTransform()
+                }
+            }
+
+            MotionEvent.ACTION_POINTER_UP -> {
+                val remainingIndex = if (event.actionIndex == 0) 1 else 0
+
+                if (remainingIndex < event.pointerCount) {
+                    lastX = event.getX(remainingIndex)
+                    lastY = event.getY(remainingIndex)
+                }
+
+                lastPinchDistance = 0f
+            }
+
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                lastPinchDistance = 0f
+            }
+        }
+    }
+
+    private fun getPointerDistance(event: MotionEvent): Float {
+        val dx = event.getX(0) - event.getX(1)
+        val dy = event.getY(0) - event.getY(1)
+        return sqrt(dx * dx + dy * dy)
+    }
+
+    private fun applyMapTransform() {
+        mapContent.scaleX = currentZoom
+        mapContent.scaleY = currentZoom
+
+        val minX = mapContent.width * (1f - currentZoom)
+        val minY = mapContent.height * (1f - currentZoom)
+
+        mapContent.translationX = mapContent.translationX.coerceIn(minX, 0f)
+        mapContent.translationY = mapContent.translationY.coerceIn(minY, 0f)
     }
 
     private fun loadImage() {
@@ -146,20 +291,23 @@ class MapViewActivity : AppCompatActivity() {
 
     private fun saveDrawing(fileName: String) {
         val safeName = fileName.trim().replace("[^a-zA-Z0-9_]".toRegex(), "_")
-        val bitmap = Bitmap.createBitmap(imageView.width, imageView.height, Bitmap.Config.ARGB_8888)
-        val canvas = android.graphics.Canvas(bitmap)
-        mapFrame.draw(canvas)
 
+        if (mapContent.width <= 0 || mapContent.height <= 0) return
+
+        val bitmap = Bitmap.createBitmap(mapContent.width, mapContent.height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        mapContent.draw(canvas)
 
         try {
             val file = File(filesDir, "saved_$safeName.png")
-            val fos = FileOutputStream(file)
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos)
-            fos.flush()
-            fos.close()
+            FileOutputStream(file).use {
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
             Toast.makeText(this, "Saved as saved_$safeName.png", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
+        } finally {
+            bitmap.recycle()
         }
     }
 }
