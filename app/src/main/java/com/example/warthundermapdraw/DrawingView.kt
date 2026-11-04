@@ -6,6 +6,7 @@ import android.view.MotionEvent
 import android.view.View
 
 class DrawingView(context: Context) : View(context) {
+
     private var drawPath = Path()
     private var drawPaint = Paint().apply {
         color = Color.BLUE
@@ -15,7 +16,8 @@ class DrawingView(context: Context) : View(context) {
         strokeJoin = Paint.Join.ROUND
         strokeCap = Paint.Cap.ROUND
     }
-    var isDrawingEnabled = true
+
+    var isDrawingEnabled = false
     private var isEraserOn = false
     private var canvasBitmap: Bitmap? = null
     private var drawCanvas: Canvas? = null
@@ -37,14 +39,27 @@ class DrawingView(context: Context) : View(context) {
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
+
+        if (w <= 0 || h <= 0) return
+
+        val oldBitmap = canvasBitmap
         canvasBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         canvasBitmap?.eraseColor(Color.TRANSPARENT)
+
+        if (oldBitmap != null) {
+            Canvas(canvasBitmap!!).drawBitmap(oldBitmap, 0f, 0f, null)
+            oldBitmap.recycle()
+        }
+
         drawCanvas = Canvas(canvasBitmap!!)
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        canvas.drawBitmap(canvasBitmap!!, 0f, 0f, null)
+        canvasBitmap?.let {
+            canvas.drawBitmap(it, 0f, 0f, null)
+        }
+
         val paint = if (isEraserOn) erasePaint else drawPaint
         canvas.drawPath(drawPath, paint)
     }
@@ -52,24 +67,43 @@ class DrawingView(context: Context) : View(context) {
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!isDrawingEnabled) return false
 
+        if (event.pointerCount > 1) {
+            drawPath.reset()
+            invalidate()
+            return true
+        }
+
         val x = event.x
         val y = event.y
 
-        when (event.action) {
-            MotionEvent.ACTION_DOWN -> drawPath.moveTo(x, y)
-            MotionEvent.ACTION_MOVE -> drawPath.lineTo(x, y)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                drawPath.reset()
+                drawPath.moveTo(x, y)
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                drawPath.lineTo(x, y)
+            }
+
             MotionEvent.ACTION_UP -> {
                 val paint = if (isEraserOn) erasePaint else drawPaint
                 drawCanvas?.drawPath(drawPath, paint)
                 drawPath.reset()
             }
+
+            MotionEvent.ACTION_CANCEL -> {
+                drawPath.reset()
+            }
         }
+
         invalidate()
         return true
     }
 
     fun clearDrawing() {
         canvasBitmap?.eraseColor(Color.TRANSPARENT)
+        drawPath.reset()
         invalidate()
     }
 }

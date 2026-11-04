@@ -6,57 +6,70 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
+    android:background="@color/dark_background"
     tools:context=".MapViewActivity">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
+        android:orientation="horizontal"
+        android:background="@color/dark_surface">
 
         <Button
             android:id="@+id/Back"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginLeft="5dp"
-            android:backgroundTint="@color/gray"
-            android:text="&lt; Back" />
+            android:backgroundTint="@color/dark_button"
+            android:textColor="@color/white"
+            android:text="&lt; Back"
+            android:textSize="14sp" />
+
         <View
             android:layout_width="0dp"
             android:layout_height="1dp"
             android:layout_weight="1" />
+
         <Button
             android:id="@+id/Save"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginRight="5dp"
-            android:layout_gravity="end"
-            android:backgroundTint="@color/gray"
-            android:text="Save" />
+            android:backgroundTint="@color/dark_button"
+            android:textColor="@color/white"
+            android:text="Save"
+            android:textSize="14sp" />
+
     </LinearLayout>
 
     <FrameLayout
         android:id="@+id/mapFrame"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_weight="1">
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="@color/dark_background">
 
-        <ImageView
-            android:id="@+id/mapImageView"
+        <FrameLayout
+            android:id="@+id/mapContent"
             android:layout_width="match_parent"
-            android:layout_height="424dp"
-            android:layout_marginTop="10dp"
-            android:adjustViewBounds="true"
-            app:srcCompat="@drawable/map_250px_maplayout_conquest1_advancetotherhine_abrbsb" />
+            android:layout_height="match_parent">
+
+            <ImageView
+                android:id="@+id/mapImageView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:adjustViewBounds="true"
+                android:scaleType="fitCenter"
+                app:srcCompat="@drawable/map_250px_maplayout_conquest1_advancetotherhine_abrbsb" />
+
+        </FrameLayout>
 
         <LinearLayout
             android:id="@+id/colorButtons"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="top|end"
-
             android:layout_margin="16dp"
-            android:layout_marginStart="16dp"
-            android:layout_marginBottom="80dp"
             android:background="@drawable/color_popup_background"
             android:elevation="6dp"
             android:orientation="horizontal"
@@ -86,49 +99,92 @@
                 android:layout_margin="8dp"
                 android:background="@drawable/color_circle"
                 android:backgroundTint="#0000FF" />
-        </LinearLayout>
-    </FrameLayout>
 
+        </LinearLayout>
+
+    </FrameLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="60dp"
-        android:background="@color/black"
+        android:background="@color/dark_surface"
         android:orientation="horizontal">
-
 
         <Button
             android:id="@+id/draw"
             style="@style/Widget.Material3.Button"
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
             android:layout_height="60dp"
-
             android:layout_weight="1"
-            android:backgroundTint="@color/black"
+            android:backgroundTint="@color/dark_button"
+            android:textColor="@color/white"
+            android:minWidth="0dp"
+            android:paddingStart="2dp"
+            android:paddingEnd="2dp"
+            android:singleLine="true"
             android:text="Draw"
+            android:textSize="11sp"
             app:icon="@drawable/pen"
+            app:iconTint="@color/white"
+            app:iconSize="18dp"
+            app:iconPadding="3dp"
             app:iconGravity="textStart" />
 
         <Button
             android:id="@+id/Erser"
-            android:layout_width="wrap_content"
+            style="@style/Widget.Material3.Button"
+            android:layout_width="0dp"
             android:layout_height="60dp"
             android:layout_weight="1"
-            android:backgroundTint="@color/black"
+            android:backgroundTint="@color/dark_button"
+            android:textColor="@color/white"
+            android:minWidth="0dp"
+            android:paddingStart="2dp"
+            android:paddingEnd="2dp"
+            android:singleLine="true"
             android:text="Clear"
+            android:textSize="11sp"
             app:icon="@drawable/eraser"
+            app:iconTint="@color/white"
+            app:iconSize="18dp"
+            app:iconPadding="3dp"
             app:iconGravity="textStart" />
 
         <Button
-        android:id="@+id/ClearAll"
-        android:layout_width="wrap_content"
-        android:layout_height="60dp"
-        android:layout_weight="1"
-        android:backgroundTint="@color/black"
-        android:text="Claer All"
-        app:icon="@drawable/eraser"
-        app:iconGravity="textStart" />
-    </LinearLayout>
+            android:id="@+id/ClearAll"
+            style="@style/Widget.Material3.Button"
+            android:layout_width="0dp"
+            android:layout_height="60dp"
+            android:layout_weight="1"
+            android:backgroundTint="@color/dark_button"
+            android:textColor="@color/white"
+            android:minWidth="0dp"
+            android:paddingStart="2dp"
+            android:paddingEnd="2dp"
+            android:singleLine="true"
+            android:text="Clear All"
+            android:textSize="11sp"
+            app:icon="@drawable/eraser"
+            app:iconTint="@color/white"
+            app:iconSize="18dp"
+            app:iconPadding="3dp"
+            app:iconGravity="textStart" />
 
+        <Button
+            android:id="@+id/Zoom"
+            style="@style/Widget.Material3.Button"
+            android:layout_width="0dp"
+            android:layout_height="60dp"
+            android:layout_weight="1"
+            android:backgroundTint="@color/dark_button"
+            android:textColor="@color/white"
+            android:minWidth="0dp"
+            android:paddingStart="2dp"
+            android:paddingEnd="2dp"
+            android:singleLine="true"
+            android:text="Zoom"
+            android:textSize="11sp" />
+
+    </LinearLayout>
 
 </LinearLayout>

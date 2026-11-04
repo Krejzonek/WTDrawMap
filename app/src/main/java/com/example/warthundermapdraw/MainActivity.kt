@@ -10,6 +10,9 @@ import android.util.Log
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.enableEdgeToEdge
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
@@ -31,7 +34,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContentView(R.layout.activity_main)
+
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
+            insets
+        }
 
         spinnerMach = findViewById(R.id.SelectMach)
         spinnerMap = findViewById(R.id.SelectMap)
@@ -66,12 +76,12 @@ class MainActivity : AppCompatActivity() {
         val machineOptions = resources.getStringArray(R.array.SelectMach)
         allMapNames = resources.getStringArray(R.array.SelectMap)
 
-        val machAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, machineOptions)
-        machAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        val machAdapter = ArrayAdapter(this, R.layout.spinner_item, machineOptions)
+        machAdapter.setDropDownViewResource(R.layout.spinner_item)
         spinnerMach.adapter = machAdapter
 
-        val mapAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, displayMapNames)
-        mapAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        val mapAdapter = ArrayAdapter(this, R.layout.spinner_item, displayMapNames)
+        mapAdapter.setDropDownViewResource(R.layout.spinner_item)
         spinnerMap.adapter = mapAdapter
 
         spinnerMach.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {

@@ -2,14 +2,17 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/main"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/dark_background"
     tools:context=".MainActivity">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:orientation="vertical">
+        android:orientation="vertical"
+        android:background="@color/dark_background">
 
         <ImageButton
             android:id="@+id/TacticalMap"
@@ -22,21 +25,25 @@
             android:contentDescription="Open menu"
             android:padding="10dp"
             android:scaleType="fitCenter"
-            app:tint="@color/black" />
+            app:tint="@color/white" />
 
         <Spinner
             android:id="@+id/SelectMach"
-            android:layout_marginBottom="10dp"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
             android:layout_marginLeft="10dp"
             android:layout_marginRight="10dp"
-            android:layout_width="match_parent"
-            android:layout_height="48dp" />
+            android:layout_marginBottom="10dp"
+            android:backgroundTint="@color/dark_border"
+            android:popupBackground="@color/dark_surface" />
 
         <Spinner
             android:id="@+id/SelectMap"
-            android:layout_margin="10dp"
             android:layout_width="match_parent"
-            android:layout_height="48dp" />
+            android:layout_height="48dp"
+            android:layout_margin="10dp"
+            android:backgroundTint="@color/dark_border"
+            android:popupBackground="@color/dark_surface" />
 
         <ImageView
             android:id="@+id/Map"
@@ -50,17 +57,18 @@
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
-        </LinearLayout>
+            android:orientation="horizontal" />
 
         <Button
             android:id="@+id/Edit"
             android:layout_width="wrap_content"
             android:layout_height="80dp"
             android:layout_gravity="center"
-            android:backgroundTint="@color/black"
+            android:backgroundTint="@color/dark_button"
             android:text="Edit"
+            android:textColor="@color/white"
             app:icon="@android:drawable/ic_menu_edit"
+            app:iconTint="@color/white"
             app:iconGravity="textStart"
             app:iconPadding="8dp" />
 
@@ -76,9 +84,10 @@
             android:layout_height="wrap_content"
             android:layout_gravity="center"
             android:layout_marginBottom="25dp"
-            android:background="@drawable/plain"
+            android:backgroundTint="@color/dark_button"
             android:text="Share"
-            android:textSize="13dp" />
+            android:textColor="@color/white"
+            android:textSize="13sp" />
 
     </LinearLayout>
 
@@ -94,7 +103,7 @@
         android:layout_width="280dp"
         android:layout_height="match_parent"
         android:layout_gravity="start"
-        android:background="@android:color/white"
+        android:background="@color/dark_surface"
         android:elevation="10dp"
         android:orientation="vertical"
         android:visibility="gone">
@@ -105,14 +114,14 @@
             android:gravity="center_vertical"
             android:paddingStart="20dp"
             android:text="War Thunder Map Draw"
-            android:textColor="@android:color/black"
+            android:textColor="@color/white"
             android:textSize="18sp"
             android:textStyle="bold" />
 
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"
-            android:background="#DDDDDD" />
+            android:background="@color/dark_border" />
 
         <TextView
             android:id="@+id/DrawMapOption"
@@ -122,7 +131,7 @@
             android:gravity="center_vertical"
             android:paddingStart="25dp"
             android:text="Draw Map"
-            android:textColor="@android:color/black"
+            android:textColor="@color/white"
             android:textSize="16sp" />
 
         <TextView
@@ -133,7 +142,7 @@
             android:gravity="center_vertical"
             android:paddingStart="25dp"
             android:text="Tactic Map"
-            android:textColor="@android:color/black"
+            android:textColor="@color/white"
             android:textSize="16sp" />
 
     </LinearLayout>
