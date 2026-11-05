@@ -13,6 +13,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import java.io.ByteArrayOutputStream
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
@@ -94,19 +95,26 @@ class MainActivity : AppCompatActivity() {
                 if (selectedMach == "Saved") {
                     share.text = "Share"
                     val savedMaps = getSavedMaps()
+
                     for (name in savedMaps) {
                         displayMapNames.add(name)
                         drawableFileNames.add("saved_$name")
                     }
                 } else {
                     share.text = "Load"
+
                     for (mapName in allMapNames) {
                         if (mapName.lowercase().contains(selectedMach.lowercase())) {
                             val displayName = mapName
                                 .replace(Regex("map_\\d{3}px_maplayout_"), "")
                                 .substringBeforeLast("_")
                                 .replace("_", " ")
-                            val drawableName = mapName.lowercase().replace(" ", "").replaceAfterLast(".", "").replace(".", "")
+
+                            val drawableName = mapName.lowercase()
+                                .replace(" ", "")
+                                .replaceAfterLast(".", "")
+                                .replace(".", "")
+
                             displayMapNames.add(displayName)
                             drawableFileNames.add(drawableName)
                         }
@@ -114,11 +122,14 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 mapAdapter.notifyDataSetChanged()
+
                 if (displayMapNames.isNotEmpty()) {
                     spinnerMap.setSelection(0)
                     loadImageForSelectedMap(0)
                 } else {
                     image.setImageDrawable(null)
+                    edit.visibility = View.GONE
+                    share.visibility = View.GONE
                 }
             }
 
@@ -135,6 +146,7 @@ class MainActivity : AppCompatActivity() {
 
         edit.setOnClickListener {
             val position = spinnerMap.selectedItemPosition
+
             if (position in drawableFileNames.indices) {
                 val intent = Intent(this, MapViewActivity::class.java)
                 intent.putExtra("MAP_NAME", drawableFileNames[position])
@@ -155,6 +167,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleCustomLink(intent)
     }
 
@@ -181,70 +194,108 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleCustomLink(intent: Intent?) {
-        val data: Uri = intent?.data ?: return
+        val data = intent?.data ?: return
         val encoded = data.getQueryParameter("img") ?: return
 
         try {
-            val bytes = Base64.decode(encoded, Base64.DEFAULT)
+            val bytes = Base64.decode(
+                encoded,
+                Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+            )
+
             val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                ?: throw IllegalArgumentException("Invalid image data")
+
             val fileName = "from_link_${System.currentTimeMillis()}"
             val file = File(filesDir, "saved_$fileName.png")
+
             file.outputStream().use {
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
             }
-            Toast.makeText(this, "Mapa zaimportowana z linku", Toast.LENGTH_LONG).show()
+
+            bitmap.recycle()
+
+            Toast.makeText(this, "Map imported successfully", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
-            Toast.makeText(this, "Nieprawidłowy link lub dane", Toast.LENGTH_SHORT).show()
+            Log.e("MainActivity", "Import error", e)
+            Toast.makeText(this, "Invalid link or image data", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun shareCurrentMap() {
         try {
-            val position = spinnerMap.selectedItemPosition
-            if (position !in drawableFileNames.indices) return
-
-            val fileName = drawableFileNames[position]
-            val sourceFile = File(filesDir, "$fileName.png")
-            if (!sourceFile.exists()) {
-                Toast.makeText(this, "Plik nie istnieje", Toast.LENGTH_SHORT).show()
+            val bitmap = getSelectedMapBitmap() ?: run {
+                Toast.makeText(this, "Unable to load map", Toast.LENGTH_SHORT).show()
                 return
             }
 
-            val uniqueId = "shared_${System.currentTimeMillis()}"
-            val targetFile = File(filesDir, "saved_$uniqueId.png")
+            val output = ByteArrayOutputStream()
 
-            sourceFile.copyTo(targetFile)
+            try {
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+            } finally {
+                bitmap.recycle()
+            }
 
-            val link = "warthundermap://load?id=$uniqueId"
+            val encoded = Base64.encodeToString(
+                output.toByteArray(),
+                Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+            )
 
-            val sendIntent = Intent().apply {
-                action = Intent.ACTION_SEND
+            val link = Uri.Builder()
+                .scheme("warthundermap")
+                .authority("load")
+                .appendQueryParameter("img", encoded)
+                .build()
+                .toString()
+
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
                 putExtra(Intent.EXTRA_TEXT, link)
                 type = "text/plain"
             }
-            val shareIntent = Intent.createChooser(sendIntent, "Udostępnij mapę")
-            startActivity(shareIntent)
+
+            startActivity(Intent.createChooser(sendIntent, "Share map"))
         } catch (e: Exception) {
-            Log.e("MainActivity", "Błąd udostępniania", e)
-            Toast.makeText(this, "Błąd: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+            Log.e("MainActivity", "Share error", e)
+            Toast.makeText(this, "Unable to share map: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun getSelectedMapBitmap(): Bitmap? {
+        val position = spinnerMap.selectedItemPosition
+        if (position !in drawableFileNames.indices) return null
+
+        val fileName = drawableFileNames[position]
+
+        return if (fileName.startsWith("saved_")) {
+            BitmapFactory.decodeFile(File(filesDir, "$fileName.png").absolutePath)
+        } else {
+            val resId = resources.getIdentifier(fileName, "drawable", packageName)
+            if (resId == 0) return null
+
+            val options = BitmapFactory.Options().apply {
+                inScaled = false
+            }
+
+            BitmapFactory.decodeResource(resources, resId, options)
         }
     }
 
     private fun loadSharedMap() {
         val input = EditText(this).apply {
-            hint = "Wklej link"
+            hint = "Paste map link"
             textSize = 18f
             setPadding(60, 50, 60, 50)
         }
 
         val dialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Wczytaj z linku")
+            .setTitle("Load from link")
             .setView(input)
-            .setPositiveButton("Wczytaj") { _, _ ->
+            .setPositiveButton("Load") { _, _ ->
                 val uri = Uri.parse(input.text.toString().trim())
                 handleCustomLink(Intent().setData(uri))
             }
-            .setNegativeButton("Anuluj", null)
+            .setNegativeButton("Cancel", null)
             .create()
 
         dialog.show()
@@ -257,6 +308,7 @@ class MainActivity : AppCompatActivity() {
 
         if (fileName.startsWith("saved_")) {
             val file = File(filesDir, "$fileName.png")
+
             if (file.exists()) {
                 val bitmap = BitmapFactory.decodeFile(file.absolutePath)
                 image.setImageBitmap(bitmap)
@@ -269,6 +321,7 @@ class MainActivity : AppCompatActivity() {
             }
         } else {
             val resId = resources.getIdentifier(fileName, "drawable", packageName)
+
             if (resId != 0) {
                 image.setImageResource(resId)
                 edit.visibility = View.VISIBLE
