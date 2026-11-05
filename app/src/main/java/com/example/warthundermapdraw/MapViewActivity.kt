@@ -4,6 +4,7 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
@@ -277,6 +278,7 @@ class MapViewActivity : AppCompatActivity() {
 
     private fun showSaveDialog() {
         val editText = EditText(this)
+
         AlertDialog.Builder(this)
             .setTitle("Save Drawing")
             .setMessage("Enter file name:")
@@ -291,20 +293,47 @@ class MapViewActivity : AppCompatActivity() {
 
     private fun saveDrawing(fileName: String) {
         val safeName = fileName.trim().replace("[^a-zA-Z0-9_]".toRegex(), "_")
+        val drawable = imageView.drawable
+        val drawing = drawingView
 
-        if (mapContent.width <= 0 || mapContent.height <= 0) return
+        if (drawable == null || drawing == null) {
+            Toast.makeText(this, "Map could not be saved", Toast.LENGTH_SHORT).show()
+            return
+        }
 
-        val bitmap = Bitmap.createBitmap(mapContent.width, mapContent.height, Bitmap.Config.ARGB_8888)
-        val canvas = android.graphics.Canvas(bitmap)
-        mapContent.draw(canvas)
+        val originalWidth = drawable.intrinsicWidth
+        val originalHeight = drawable.intrinsicHeight
+
+        if (originalWidth <= 0 || originalHeight <= 0 || drawing.width <= 0 || drawing.height <= 0) {
+            Toast.makeText(this, "Invalid map dimensions", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val bitmap = Bitmap.createBitmap(originalWidth, originalHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
 
         try {
+            drawable.setBounds(0, 0, originalWidth, originalHeight)
+            drawable.draw(canvas)
+
+            val inverseMatrix = android.graphics.Matrix()
+            if (!imageView.imageMatrix.invert(inverseMatrix)) {
+                throw IllegalStateException("Unable to calculate map coordinates")
+            }
+
+            canvas.save()
+            canvas.concat(inverseMatrix)
+            drawing.draw(canvas)
+            canvas.restore()
+
             val file = File(filesDir, "saved_$safeName.png")
             FileOutputStream(file).use {
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
             }
+
             Toast.makeText(this, "Saved as saved_$safeName.png", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
+            Log.e("MapView", "Save failed", e)
             Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
         } finally {
             bitmap.recycle()
