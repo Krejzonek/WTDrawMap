@@ -1,26 +1,37 @@
 package com.example.warthundermapdraw
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
 import android.util.Log
+import android.view.Gravity
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import java.io.ByteArrayOutputStream
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var spinnerMach: Spinner
-    private lateinit var spinnerMap: Spinner
+    private lateinit var searchMap: AutoCompleteTextView
     private lateinit var image: ImageView
+    private lateinit var searchMapHint: TextView
     private lateinit var edit: Button
     private lateinit var share: Button
     private lateinit var tacticalMap: ImageButton
@@ -28,10 +39,18 @@ class MainActivity : AppCompatActivity() {
     private lateinit var menuOverlay: View
     private lateinit var drawMapOption: TextView
     private lateinit var tacticMapOption: TextView
+    private lateinit var mapAdapter: ArrayAdapter<MapEntry>
 
-    private lateinit var allMapNames: Array<String>
-    private val displayMapNames = mutableListOf<String>()
-    private val drawableFileNames = mutableListOf<String>()
+    private val mapEntries = mutableListOf<MapEntry>()
+    private var selectedMap: MapEntry? = null
+
+    private data class MapEntry(
+        val displayName: String,
+        val fileName: String,
+        val isSaved: Boolean
+    ) {
+        override fun toString(): String = displayName
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,9 +63,9 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
-        spinnerMach = findViewById(R.id.SelectMach)
-        spinnerMap = findViewById(R.id.SelectMap)
+        searchMap = findViewById(R.id.SearchMap)
         image = findViewById(R.id.Map)
+        searchMapHint = findViewById(R.id.SearchMapHint)
         edit = findViewById(R.id.Edit)
         share = findViewById(R.id.Share)
         tacticalMap = findViewById(R.id.TacticalMap)
@@ -74,88 +93,53 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, TacticalMapActivity::class.java))
         }
 
-        val machineOptions = resources.getStringArray(R.array.SelectMach)
-        allMapNames = resources.getStringArray(R.array.SelectMap)
-
-        val machAdapter = ArrayAdapter(this, R.layout.spinner_item, machineOptions)
-        machAdapter.setDropDownViewResource(R.layout.spinner_item)
-        spinnerMach.adapter = machAdapter
-
-        val mapAdapter = ArrayAdapter(this, R.layout.spinner_item, displayMapNames)
+        mapAdapter = ArrayAdapter(this, R.layout.spinner_item, mapEntries)
         mapAdapter.setDropDownViewResource(R.layout.spinner_item)
-        spinnerMap.adapter = mapAdapter
+        searchMap.setAdapter(mapAdapter)
+        searchMap.threshold = 1
 
-        spinnerMach.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val selectedMach = machineOptions[position]
+        loadMapEntries()
 
-                displayMapNames.clear()
-                drawableFileNames.clear()
+        selectedMap = null
+        searchMap.setText("", false)
+        image.setImageDrawable(null)
+        searchMapHint.visibility = View.VISIBLE
+        edit.visibility = View.GONE
+        share.visibility = View.VISIBLE
+        share.text = "Load"
 
-                if (selectedMach == "Saved") {
-                    share.text = "Share"
-                    val savedMaps = getSavedMaps()
-
-                    for (name in savedMaps) {
-                        displayMapNames.add(name)
-                        drawableFileNames.add("saved_$name")
-                    }
-                } else {
-                    share.text = "Load"
-
-                    for (mapName in allMapNames) {
-                        if (mapName.lowercase().contains(selectedMach.lowercase())) {
-                            val displayName = mapName
-                                .replace(Regex("map_\\d{3}px_maplayout_"), "")
-                                .substringBeforeLast("_")
-                                .replace("_", " ")
-
-                            val drawableName = mapName.lowercase()
-                                .replace(" ", "")
-                                .replaceAfterLast(".", "")
-                                .replace(".", "")
-
-                            displayMapNames.add(displayName)
-                            drawableFileNames.add(drawableName)
-                        }
-                    }
-                }
-
-                mapAdapter.notifyDataSetChanged()
-
-                if (displayMapNames.isNotEmpty()) {
-                    spinnerMap.setSelection(0)
-                    loadImageForSelectedMap(0)
-                } else {
-                    image.setImageDrawable(null)
-                    edit.visibility = View.GONE
-                    share.visibility = View.GONE
-                }
-            }
-
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        searchMap.setOnClickListener {
+            searchMap.showDropDown()
         }
 
-        spinnerMap.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                loadImageForSelectedMap(position)
-            }
+        searchMap.setOnItemClickListener { parent, _, position, _ ->
+            val entry = parent.getItemAtPosition(position) as MapEntry
+            selectMap(entry)
+        }
 
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        searchMap.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                searchMap.showDropDown()
+            }
         }
 
         edit.setOnClickListener {
-            val position = spinnerMap.selectedItemPosition
+            val entry = selectedMap ?: return@setOnClickListener
 
-            if (position in drawableFileNames.indices) {
-                val intent = Intent(this, MapViewActivity::class.java)
-                intent.putExtra("MAP_NAME", drawableFileNames[position])
-                startActivity(intent)
-            }
+            val intent = Intent(this, MapViewActivity::class.java)
+            intent.putExtra("MAP_NAME", entry.fileName)
+            startActivity(intent)
         }
 
         share.setOnClickListener {
-            if (share.text == "Share") {
+            val entry = selectedMap
+
+            if (entry == null) {
+                loadSharedMap()
+                return@setOnClickListener
+            }
+
+            if (entry.isSaved) {
                 shareCurrentMap()
             } else {
                 loadSharedMap()
@@ -163,6 +147,57 @@ class MainActivity : AppCompatActivity() {
         }
 
         handleCustomLink(intent)
+    }
+
+    private fun loadMapEntries() {
+        mapEntries.clear()
+
+        val allMapNames = resources.getStringArray(R.array.SelectMap)
+
+        for (mapName in allMapNames) {
+            val displayName = mapName
+                .replace(Regex("map_\\d{3}px_maplayout_"), "")
+                .substringBeforeLast("_")
+                .replace("_", " ")
+
+            val drawableName = mapName.lowercase()
+                .replace(" ", "")
+                .replaceAfterLast(".", "")
+                .replace(".", "")
+
+            mapEntries.add(
+                MapEntry(
+                    displayName = displayName,
+                    fileName = drawableName,
+                    isSaved = false
+                )
+            )
+        }
+
+        for (name in getSavedMaps()) {
+            mapEntries.add(
+                MapEntry(
+                    displayName = "Saved: $name",
+                    fileName = "saved_$name",
+                    isSaved = true
+                )
+            )
+        }
+
+        mapAdapter.notifyDataSetChanged()
+    }
+
+    private fun selectMap(entry: MapEntry) {
+        selectedMap = entry
+        searchMap.setText(entry.displayName, false)
+
+        searchMapHint.visibility = View.GONE
+        share.text = if (entry.isSaved) "Share" else "Load"
+
+        edit.visibility = View.VISIBLE
+        share.visibility = View.VISIBLE
+
+        loadImageForSelectedMap(entry)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -195,6 +230,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleCustomLink(intent: Intent?) {
         val data = intent?.data ?: return
+
+        if (data.scheme != "warthundermap" || data.host != "load") {
+            Toast.makeText(this, "Invalid map link", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         val encoded = data.getQueryParameter("img") ?: return
 
         try {
@@ -215,62 +256,280 @@ class MainActivity : AppCompatActivity() {
 
             bitmap.recycle()
 
-            Toast.makeText(this, "Map imported successfully", Toast.LENGTH_LONG).show()
+            loadMapEntries()
+
+            val importedMap = mapEntries.firstOrNull {
+                it.fileName == "saved_$fileName"
+            }
+
+            importedMap?.let {
+                selectMap(it)
+            }
+
+            Toast.makeText(
+                this,
+                "Map imported successfully",
+                Toast.LENGTH_LONG
+            ).show()
+
         } catch (e: Exception) {
             Log.e("MainActivity", "Import error", e)
-            Toast.makeText(this, "Invalid link or image data", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                this,
+                "Invalid link or image data",
+                Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
     private fun shareCurrentMap() {
         try {
-            val bitmap = getSelectedMapBitmap() ?: run {
-                Toast.makeText(this, "Unable to load map", Toast.LENGTH_SHORT).show()
-                return
-            }
+            val link = createMapLink() ?: return
+            val qrBitmap = generateQrCode(link)
 
-            val output = ByteArrayOutputStream()
+            showShareDialog(link, qrBitmap)
 
-            try {
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
-            } finally {
-                bitmap.recycle()
-            }
-
-            val encoded = Base64.encodeToString(
-                output.toByteArray(),
-                Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
-            )
-
-            val link = Uri.Builder()
-                .scheme("warthundermap")
-                .authority("load")
-                .appendQueryParameter("img", encoded)
-                .build()
-                .toString()
-
-            val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                putExtra(Intent.EXTRA_TEXT, link)
-                type = "text/plain"
-            }
-
-            startActivity(Intent.createChooser(sendIntent, "Share map"))
         } catch (e: Exception) {
             Log.e("MainActivity", "Share error", e)
-            Toast.makeText(this, "Unable to share map: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                this,
+                "Unable to generate QR code: ${e.localizedMessage}",
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
+    private fun createMapLink(): String? {
+        val bitmap = getSelectedMapBitmap() ?: run {
+            Toast.makeText(this, "Unable to load map", Toast.LENGTH_SHORT).show()
+            return null
+        }
+
+        try {
+            val scales = listOf(1f, 0.8f, 0.65f, 0.5f, 0.35f, 0.25f, 0.15f)
+            val qualities = listOf(85, 70, 55, 40, 30)
+
+            for (scale in scales) {
+                val width = (bitmap.width * scale).toInt().coerceAtLeast(1)
+                val height = (bitmap.height * scale).toInt().coerceAtLeast(1)
+
+                val scaledBitmap = if (scale == 1f) {
+                    bitmap
+                } else {
+                    Bitmap.createScaledBitmap(bitmap, width, height, true)
+                }
+
+                try {
+                    for (quality in qualities) {
+                        val output = ByteArrayOutputStream()
+
+                        scaledBitmap.compress(
+                            Bitmap.CompressFormat.JPEG,
+                            quality,
+                            output
+                        )
+
+                        val encoded = Base64.encodeToString(
+                            output.toByteArray(),
+                            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+                        )
+
+                        val link = Uri.Builder()
+                            .scheme("warthundermap")
+                            .authority("load")
+                            .appendQueryParameter("img", encoded)
+                            .build()
+                            .toString()
+
+                        if (link.length <= 2500) {
+                            return link
+                        }
+                    }
+                } finally {
+                    if (scaledBitmap !== bitmap) {
+                        scaledBitmap.recycle()
+                    }
+                }
+            }
+
+            Toast.makeText(
+                this,
+                "Map is too large for a QR code",
+                Toast.LENGTH_LONG
+            ).show()
+
+            return null
+
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    private fun generateQrCode(link: String): Bitmap {
+        val hints = mapOf<EncodeHintType, Any>(
+            EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.L,
+            EncodeHintType.CHARACTER_SET to "UTF-8",
+            EncodeHintType.MARGIN to 2
+        )
+
+        val matrix = QRCodeWriter().encode(
+            link,
+            BarcodeFormat.QR_CODE,
+            900,
+            900,
+            hints
+        )
+
+        val bitmap = Bitmap.createBitmap(
+            matrix.width,
+            matrix.height,
+            Bitmap.Config.ARGB_8888
+        )
+
+        for (x in 0 until matrix.width) {
+            for (y in 0 until matrix.height) {
+                bitmap.setPixel(
+                    x,
+                    y,
+                    if (matrix[x, y]) Color.BLACK else Color.WHITE
+                )
+            }
+        }
+
+        return bitmap
+    }
+
+    private fun showShareDialog(link: String, qrBitmap: Bitmap) {
+        val density = resources.displayMetrics.density
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(
+                (20 * density).toInt(),
+                (12 * density).toInt(),
+                (20 * density).toInt(),
+                (8 * density).toInt()
+            )
+        }
+
+        val qrImage = ImageView(this).apply {
+            setImageBitmap(qrBitmap)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            adjustViewBounds = true
+        }
+
+        container.addView(
+            qrImage,
+            LinearLayout.LayoutParams(
+                (260 * density).toInt(),
+                (260 * density).toInt()
+            )
+        )
+
+        val description = TextView(this).apply {
+            text = "Scan this QR code to import the map"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(Color.GRAY)
+            setPadding(0, 0, 0, (16 * density).toInt())
+        }
+
+        container.addView(description)
+
+        val linkLabel = TextView(this).apply {
+            text = "Map link"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setPadding(0, (8 * density).toInt(), 0, (6 * density).toInt())
+        }
+
+        container.addView(linkLabel)
+
+        val linkText = TextView(this).apply {
+            text = link
+            textSize = 12f
+            setTextColor(Color.rgb(80, 160, 255))
+            setPadding(
+                (10 * density).toInt(),
+                (10 * density).toInt(),
+                (10 * density).toInt(),
+                (10 * density).toInt()
+            )
+            setBackgroundResource(R.drawable.dark_input_background)
+            isClickable = true
+            isFocusable = true
+            maxLines = 3
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+
+        container.addView(
+            linkText,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        val copyButton = Button(this).apply {
+            text = "Copy link"
+            setOnClickListener {
+                val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(
+                    ClipData.newPlainText("War Thunder Map", link)
+                )
+
+                Toast.makeText(
+                    this@MainActivity,
+                    "Link copied",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+
+        container.addView(
+            copyButton,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = (8 * density).toInt()
+            }
+        )
+
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Share map")
+            .setView(container)
+            .setNegativeButton("Close", null)
+            .create()
+
+        linkText.setOnClickListener {
+            dialog.dismiss()
+            handleCustomLink(Intent().setData(Uri.parse(link)))
+        }
+
+        dialog.setOnDismissListener {
+            qrBitmap.recycle()
+        }
+
+        dialog.show()
+    }
+
     private fun getSelectedMapBitmap(): Bitmap? {
-        val position = spinnerMap.selectedItemPosition
-        if (position !in drawableFileNames.indices) return null
+        val entry = selectedMap ?: return null
+        val fileName = entry.fileName
 
-        val fileName = drawableFileNames[position]
-
-        return if (fileName.startsWith("saved_")) {
-            BitmapFactory.decodeFile(File(filesDir, "$fileName.png").absolutePath)
+        return if (entry.isSaved) {
+            BitmapFactory.decodeFile(
+                File(filesDir, "$fileName.png").absolutePath
+            )
         } else {
-            val resId = resources.getIdentifier(fileName, "drawable", packageName)
+            val resId = resources.getIdentifier(
+                fileName,
+                "drawable",
+                packageName
+            )
+
             if (resId == 0) return null
 
             val options = BitmapFactory.Options().apply {
@@ -282,62 +541,103 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadSharedMap() {
-        val input = EditText(this).apply {
-            hint = "Paste map link"
-            textSize = 18f
-            setPadding(60, 50, 60, 50)
-        }
+        val options = GmsBarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+            .build()
 
-        val dialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Load from link")
-            .setView(input)
-            .setPositiveButton("Load") { _, _ ->
-                val uri = Uri.parse(input.text.toString().trim())
-                handleCustomLink(Intent().setData(uri))
+        val scanner = GmsBarcodeScanning.getClient(this, options)
+
+        scanner.startScan()
+            .addOnSuccessListener { barcode ->
+                val value = barcode.rawValue
+
+                if (value.isNullOrBlank()) {
+                    Toast.makeText(
+                        this,
+                        "Invalid QR code",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return@addOnSuccessListener
+                }
+
+                handleCustomLink(Intent().setData(Uri.parse(value)))
             }
-            .setNegativeButton("Cancel", null)
-            .create()
+            .addOnCanceledListener {
+                Toast.makeText(
+                    this,
+                    "Scanning cancelled",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            .addOnFailureListener { e ->
+                Log.e("MainActivity", "QR scan error", e)
 
-        dialog.show()
+                Toast.makeText(
+                    this,
+                    "Unable to scan QR code",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
     }
 
-    private fun loadImageForSelectedMap(position: Int) {
-        if (position !in drawableFileNames.indices) return
-
-        val fileName = drawableFileNames[position]
-
-        if (fileName.startsWith("saved_")) {
-            val file = File(filesDir, "$fileName.png")
+    private fun loadImageForSelectedMap(entry: MapEntry) {
+        if (entry.isSaved) {
+            val file = File(filesDir, "${entry.fileName}.png")
 
             if (file.exists()) {
                 val bitmap = BitmapFactory.decodeFile(file.absolutePath)
-                image.setImageBitmap(bitmap)
-                edit.visibility = View.VISIBLE
-                share.visibility = View.VISIBLE
+
+                if (bitmap != null) {
+                    image.setImageBitmap(bitmap)
+                    searchMapHint.visibility = View.GONE
+                    edit.visibility = View.VISIBLE
+                    share.visibility = View.VISIBLE
+                    share.text = "Share"
+                } else {
+                    image.setImageDrawable(null)
+                    searchMapHint.visibility = View.VISIBLE
+                    edit.visibility = View.GONE
+                    share.visibility = View.VISIBLE
+                    share.text = "Share"
+                }
             } else {
                 image.setImageDrawable(null)
+                searchMapHint.visibility = View.VISIBLE
                 edit.visibility = View.GONE
-                share.visibility = View.GONE
+                share.visibility = View.VISIBLE
+                share.text = "Share"
             }
         } else {
-            val resId = resources.getIdentifier(fileName, "drawable", packageName)
+            val resId = resources.getIdentifier(
+                entry.fileName,
+                "drawable",
+                packageName
+            )
 
             if (resId != 0) {
                 image.setImageResource(resId)
+                searchMapHint.visibility = View.GONE
                 edit.visibility = View.VISIBLE
                 share.visibility = View.VISIBLE
+                share.text = "Load"
             } else {
                 image.setImageDrawable(null)
+                searchMapHint.visibility = View.VISIBLE
                 edit.visibility = View.GONE
-                share.visibility = View.GONE
+                share.visibility = View.VISIBLE
+                share.text = "Load"
             }
         }
     }
 
     private fun getSavedMaps(): List<String> {
         return filesDir.listFiles()
-            ?.filter { it.name.startsWith("saved_") && it.name.endsWith(".png") }
-            ?.map { it.name.removePrefix("saved_").removeSuffix(".png") }
+            ?.filter {
+                it.name.startsWith("saved_") && it.name.endsWith(".png")
+            }
+            ?.map {
+                it.name.removePrefix("saved_").removeSuffix(".png")
+            }
             ?: emptyList()
     }
 }
