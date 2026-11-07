@@ -2,16 +2,19 @@ package com.example.warthundermapdraw
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
 import android.util.Log
 import android.view.Gravity
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.enableEdgeToEdge
@@ -40,6 +43,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var drawMapOption: TextView
     private lateinit var tacticMapOption: TextView
     private lateinit var mapAdapter: ArrayAdapter<MapEntry>
+    private lateinit var mapLegend: LinearLayout
+    private lateinit var mapLegendScroll: HorizontalScrollView
 
     private val mapEntries = mutableListOf<MapEntry>()
     private var selectedMap: MapEntry? = null
@@ -73,6 +78,8 @@ class MainActivity : AppCompatActivity() {
         menuOverlay = findViewById(R.id.MenuOverlay)
         drawMapOption = findViewById(R.id.DrawMapOption)
         tacticMapOption = findViewById(R.id.TacticMapOption)
+        mapLegend = findViewById(R.id.MapLegend)
+        mapLegendScroll = findViewById(R.id.MapLegendScroll)
 
         sideMenu.translationX = -280 * resources.displayMetrics.density
 
@@ -107,6 +114,8 @@ class MainActivity : AppCompatActivity() {
         edit.visibility = View.GONE
         share.visibility = View.VISIBLE
         share.text = "Load"
+        mapLegendScroll.visibility = View.GONE
+        mapLegend.removeAllViews()
 
         searchMap.setOnClickListener {
             searchMap.showDropDown()
@@ -115,6 +124,11 @@ class MainActivity : AppCompatActivity() {
         searchMap.setOnItemClickListener { parent, _, position, _ ->
             val entry = parent.getItemAtPosition(position) as MapEntry
             selectMap(entry)
+
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.hideSoftInputFromWindow(searchMap.windowToken, 0)
+
+            searchMap.clearFocus()
         }
 
         searchMap.setOnFocusChangeListener { _, hasFocus ->
@@ -198,6 +212,67 @@ class MainActivity : AppCompatActivity() {
         share.visibility = View.VISIBLE
 
         loadImageForSelectedMap(entry)
+        loadMapLegend(entry)
+    }
+
+    private fun loadMapLegend(entry: MapEntry) {
+        mapLegend.removeAllViews()
+        mapLegendScroll.visibility = View.GONE
+
+        if (!entry.isSaved) return
+
+        val file = File(filesDir, "${entry.fileName}.legend")
+        if (!file.exists()) return
+
+        val density = resources.displayMetrics.density
+
+        file.readLines().forEach { line ->
+            val parts = line.split("|", limit = 2)
+            if (parts.size != 2) return@forEach
+
+            val color = parts[0].toIntOrNull() ?: return@forEach
+            val label = parts[1]
+
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(
+                    (8 * density).toInt(),
+                    (5 * density).toInt(),
+                    (12 * density).toInt(),
+                    (5 * density).toInt()
+                )
+            }
+
+            val colorView = View(this).apply {
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(color)
+                }
+            }
+
+            item.addView(
+                colorView,
+                LinearLayout.LayoutParams(
+                    (12 * density).toInt(),
+                    (12 * density).toInt()
+                )
+            )
+
+            val textView = TextView(this).apply {
+                text = label
+                textSize = 12f
+                setTextColor(Color.WHITE)
+                setPadding((6 * density).toInt(), 0, 0, 0)
+            }
+
+            item.addView(textView)
+            mapLegend.addView(item)
+        }
+
+        if (mapLegend.childCount > 0) {
+            mapLegendScroll.visibility = View.VISIBLE
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -248,7 +323,9 @@ class MainActivity : AppCompatActivity() {
                 ?: throw IllegalArgumentException("Invalid image data")
 
             val fileName = "from_link_${System.currentTimeMillis()}"
-            val file = File(filesDir, "saved_$fileName.png")
+            val savedFileName = "saved_$fileName"
+
+            val file = File(filesDir, "$savedFileName.png")
 
             file.outputStream().use {
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
@@ -256,10 +333,23 @@ class MainActivity : AppCompatActivity() {
 
             bitmap.recycle()
 
+            val encodedLegend = data.getQueryParameter("legend")
+
+            if (!encodedLegend.isNullOrBlank()) {
+                val legendBytes = Base64.decode(
+                    encodedLegend,
+                    Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+                )
+
+                val legendText = String(legendBytes, Charsets.UTF_8)
+
+                File(filesDir, "$savedFileName.legend").writeText(legendText)
+            }
+
             loadMapEntries()
 
             val importedMap = mapEntries.firstOrNull {
-                it.fileName == "saved_$fileName"
+                it.fileName == savedFileName
             }
 
             importedMap?.let {
@@ -300,12 +390,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun createMapLink(): String? {
+        val entry = selectedMap ?: return null
+
         val bitmap = getSelectedMapBitmap() ?: run {
             Toast.makeText(this, "Unable to load map", Toast.LENGTH_SHORT).show()
             return null
         }
 
         try {
+            val legendFile = File(filesDir, "${entry.fileName}.legend")
+
+            val legendText = if (entry.isSaved && legendFile.exists()) {
+                legendFile.readText()
+            } else {
+                ""
+            }
+
+            val encodedLegend = if (legendText.isNotEmpty()) {
+                Base64.encodeToString(
+                    legendText.toByteArray(Charsets.UTF_8),
+                    Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+                )
+            } else {
+                null
+            }
+
             val scales = listOf(1f, 0.8f, 0.65f, 0.5f, 0.35f, 0.25f, 0.15f)
             val qualities = listOf(85, 70, 55, 40, 30)
 
@@ -334,12 +443,16 @@ class MainActivity : AppCompatActivity() {
                             Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
                         )
 
-                        val link = Uri.Builder()
+                        val builder = Uri.Builder()
                             .scheme("warthundermap")
                             .authority("load")
                             .appendQueryParameter("img", encoded)
-                            .build()
-                            .toString()
+
+                        if (!encodedLegend.isNullOrEmpty()) {
+                            builder.appendQueryParameter("legend", encodedLegend)
+                        }
+
+                        val link = builder.build().toString()
 
                         if (link.length <= 2500) {
                             return link
@@ -354,7 +467,7 @@ class MainActivity : AppCompatActivity() {
 
             Toast.makeText(
                 this,
-                "Map is too large for a QR code",
+                "Map and legend are too large for a QR code",
                 Toast.LENGTH_LONG
             ).show()
 
@@ -428,7 +541,7 @@ class MainActivity : AppCompatActivity() {
         )
 
         val description = TextView(this).apply {
-            text = "Scan this QR code to import the map"
+            text = "Scan this QR code to import the map and its legend"
             textSize = 14f
             gravity = Gravity.CENTER
             setTextColor(Color.GRAY)

@@ -13,13 +13,14 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:gravity="center_vertical"
         android:background="@color/dark_surface">
 
         <Button
             android:id="@+id/Back"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginLeft="5dp"
+            android:layout_marginStart="5dp"
             android:backgroundTint="@color/dark_button"
             android:textColor="@color/white"
             android:text="&lt; Back"
@@ -34,7 +35,7 @@
             android:id="@+id/Save"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginRight="5dp"
+            android:layout_marginEnd="5dp"
             android:backgroundTint="@color/dark_button"
             android:textColor="@color/white"
             android:text="Save"
@@ -78,31 +79,128 @@
 
             <View
                 android:id="@+id/colorRed"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:layout_margin="8dp"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_margin="5dp"
                 android:background="@drawable/color_circle"
                 android:backgroundTint="#FF0000" />
 
             <View
                 android:id="@+id/colorGreen"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:layout_margin="8dp"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_margin="5dp"
                 android:background="@drawable/color_circle"
                 android:backgroundTint="#00FF00" />
 
             <View
                 android:id="@+id/colorBlue"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:layout_margin="8dp"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_margin="5dp"
                 android:background="@drawable/color_circle"
                 android:backgroundTint="#0000FF" />
+
+            <View
+                android:id="@+id/colorYellow"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_margin="5dp"
+                android:background="@drawable/color_circle"
+                android:backgroundTint="#FFFF00" />
+
+            <View
+                android:id="@+id/colorOrange"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_margin="5dp"
+                android:background="@drawable/color_circle"
+                android:backgroundTint="#FF8C00" />
+
+            <View
+                android:id="@+id/colorPurple"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_margin="5dp"
+                android:background="@drawable/color_circle"
+                android:backgroundTint="#A046DC" />
+
+            <View
+                android:id="@+id/colorWhite"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_margin="5dp"
+                android:background="@drawable/color_circle"
+                android:backgroundTint="#FFFFFF" />
 
         </LinearLayout>
 
     </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="54dp"
+        android:minHeight="54dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="6dp"
+        android:paddingEnd="6dp"
+        android:background="@color/dark_surface"
+        android:clipChildren="true"
+        android:clipToPadding="true">
+
+        <HorizontalScrollView
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginEnd="6dp"
+            android:fillViewport="false"
+            android:scrollbars="none"
+            android:clipChildren="true"
+            android:clipToPadding="true"
+            android:overScrollMode="never">
+
+            <LinearLayout
+                android:id="@+id/legendContainer"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center_vertical"
+                android:orientation="horizontal" />
+
+        </HorizontalScrollView>
+
+        <Button
+            android:id="@+id/Undo"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:backgroundTint="@color/dark_button"
+            android:contentDescription="Undo"
+            android:text=""
+            app:icon="@drawable/ic_undo"
+            app:iconTint="@color/white"
+            app:iconSize="24dp"
+            app:iconPadding="0dp"
+            app:iconGravity="textStart" />
+
+        <Button
+            android:id="@+id/Redo"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="5dp"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:backgroundTint="@color/dark_button"
+            android:contentDescription="Redo"
+            android:text=""
+            app:icon="@drawable/ic_redo"
+            app:iconTint="@color/white"
+            app:iconSize="24dp"
+            app:iconPadding="0dp"
+            app:iconGravity="textStart" />
+
+    </LinearLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -124,7 +222,7 @@
             android:singleLine="true"
             android:text="Draw"
             android:textSize="11sp"
-            app:icon="@drawable/pen"
+            app:icon="@drawable/ic_pen"
             app:iconTint="@color/white"
             app:iconSize="18dp"
             app:iconPadding="3dp"
@@ -142,9 +240,9 @@
             android:paddingStart="2dp"
             android:paddingEnd="2dp"
             android:singleLine="true"
-            android:text="Clear"
+            android:text="Erase"
             android:textSize="11sp"
-            app:icon="@drawable/eraser"
+            app:icon="@drawable/ic_eraser"
             app:iconTint="@color/white"
             app:iconSize="18dp"
             app:iconPadding="3dp"
@@ -164,7 +262,7 @@
             android:singleLine="true"
             android:text="Clear All"
             android:textSize="11sp"
-            app:icon="@drawable/eraser"
+            app:icon="@drawable/ic_eraser"
             app:iconTint="@color/white"
             app:iconSize="18dp"
             app:iconPadding="3dp"
@@ -183,7 +281,13 @@
             android:paddingEnd="2dp"
             android:singleLine="true"
             android:text="Zoom"
-            android:textSize="11sp" />
+            android:textSize="11sp"
+            android:contentDescription="Zoom"
+            app:icon="@drawable/ic_zoom"
+            app:iconTint="@color/white"
+            app:iconSize="18dp"
+            app:iconPadding="3dp"
+            app:iconGravity="textStart" />
 
     </LinearLayout>
 
