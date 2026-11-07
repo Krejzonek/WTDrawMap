@@ -6,6 +6,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.RectF
+import android.graphics.Paint
 import android.os.Bundle
 import android.util.Log
 import android.view.MotionEvent
@@ -32,6 +34,9 @@ class MapViewActivity : AppCompatActivity() {
     private lateinit var clearAll: Button
     private lateinit var zoomButton: Button
     private lateinit var colorButtons: LinearLayout
+    private lateinit var undoButton: Button
+    private lateinit var redoButton: Button
+    private lateinit var legendContainer: LinearLayout
 
     private var drawingView: DrawingView? = null
     private var isSavedMap = false
@@ -45,6 +50,8 @@ class MapViewActivity : AppCompatActivity() {
     private var lastX = 0f
     private var lastY = 0f
     private var lastPinchDistance = 0f
+
+    private val legendEntries = linkedMapOf<Int, String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,6 +77,9 @@ class MapViewActivity : AppCompatActivity() {
         clearAll = findViewById(R.id.ClearAll)
         zoomButton = findViewById(R.id.Zoom)
         colorButtons = findViewById(R.id.colorButtons)
+        undoButton = findViewById(R.id.Undo)
+        redoButton = findViewById(R.id.Redo)
+        legendContainer = findViewById(R.id.legendContainer)
 
         loadImage()
 
@@ -77,14 +87,45 @@ class MapViewActivity : AppCompatActivity() {
         mapContent.pivotY = 0f
 
         drawingView = DrawingView(this)
-        mapContent.addView(drawingView, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT
-        ))
+        mapContent.addView(
+            drawingView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+
+        drawingView?.onColorUsed = { color ->
+            addLegendColor(color)
+        }
+
+        drawingView?.onHistoryChanged = {
+            updateHistoryButtons()
+        }
+
+        mapContent.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            updateDrawingBounds()
+        }
+
+        imageView.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            updateDrawingBounds()
+        }
+
+        mapContent.post {
+            updateDrawingBounds()
+        }
+
+        loadLegend()
+        updateLegend()
+        updateHistoryButtons()
 
         val colorRed = findViewById<View>(R.id.colorRed)
         val colorGreen = findViewById<View>(R.id.colorGreen)
         val colorBlue = findViewById<View>(R.id.colorBlue)
+        val colorYellow = findViewById<View>(R.id.colorYellow)
+        val colorOrange = findViewById<View>(R.id.colorOrange)
+        val colorPurple = findViewById<View>(R.id.colorPurple)
+        val colorWhite = findViewById<View>(R.id.colorWhite)
 
         mapFrame.isClickable = true
         mapFrame.setOnTouchListener { _, event ->
@@ -116,19 +157,22 @@ class MapViewActivity : AppCompatActivity() {
             }
         }
 
-        colorRed.setOnClickListener {
-            drawingView?.setColor(Color.RED)
-            colorButtons.visibility = View.GONE
+        colorRed.setOnClickListener { selectColor(Color.RED) }
+        colorGreen.setOnClickListener { selectColor(Color.GREEN) }
+        colorBlue.setOnClickListener { selectColor(Color.BLUE) }
+        colorYellow.setOnClickListener { selectColor(Color.YELLOW) }
+        colorOrange.setOnClickListener { selectColor(Color.rgb(255, 140, 0)) }
+        colorPurple.setOnClickListener { selectColor(Color.rgb(160, 70, 220)) }
+        colorWhite.setOnClickListener { selectColor(Color.WHITE) }
+
+        undoButton.setOnClickListener {
+            drawingView?.undo()
+            updateHistoryButtons()
         }
 
-        colorGreen.setOnClickListener {
-            drawingView?.setColor(Color.GREEN)
-            colorButtons.visibility = View.GONE
-        }
-
-        colorBlue.setOnClickListener {
-            drawingView?.setColor(Color.BLUE)
-            colorButtons.visibility = View.GONE
+        redoButton.setOnClickListener {
+            drawingView?.redo()
+            updateHistoryButtons()
         }
 
         clearAll.setOnClickListener {
@@ -137,6 +181,7 @@ class MapViewActivity : AppCompatActivity() {
                 .setMessage("Are you sure you want to delete all drawings?")
                 .setPositiveButton("Clear") { _, _ ->
                     drawingView?.clearDrawing()
+                    updateHistoryButtons()
                 }
                 .setNegativeButton("Cancel", null)
                 .show()
@@ -168,6 +213,165 @@ class MapViewActivity : AppCompatActivity() {
                 }
                 .setNegativeButton("No", null)
                 .show()
+        }
+    }
+
+    private fun updateDrawingBounds() {
+        val drawable = imageView.drawable ?: return
+        if (imageView.width <= 0 || imageView.height <= 0) return
+
+        val bounds = RectF(
+            0f,
+            0f,
+            drawable.intrinsicWidth.toFloat(),
+            drawable.intrinsicHeight.toFloat()
+        )
+
+        imageView.imageMatrix.mapRect(bounds)
+
+        drawingView?.setDrawingBounds(bounds)
+    }
+
+    private fun selectColor(color: Int) {
+        drawingView?.setColor(color)
+        drawingView?.setEraseMode(false)
+        colorButtons.visibility = View.GONE
+    }
+
+    private fun updateHistoryButtons() {
+        undoButton.isEnabled = drawingView?.canUndo() == true
+        redoButton.isEnabled = drawingView?.canRedo() == true
+        undoButton.alpha = if (undoButton.isEnabled) 1f else 0.4f
+        redoButton.alpha = if (redoButton.isEnabled) 1f else 0.4f
+    }
+
+    private fun addLegendColor(color: Int) {
+        if (!legendEntries.containsKey(color)) {
+            legendEntries[color] = getColorName(color)
+            updateLegend()
+        }
+    }
+
+    private fun getColorName(color: Int): String {
+        return when (color) {
+            Color.RED -> "Red"
+            Color.GREEN -> "Green"
+            Color.BLUE -> "Blue"
+            Color.YELLOW -> "Yellow"
+            Color.WHITE -> "White"
+            Color.rgb(255, 140, 0) -> "Orange"
+            Color.rgb(160, 70, 220) -> "Purple"
+            else -> "Color"
+        }
+    }
+
+    private fun updateLegend() {
+        legendContainer.removeAllViews()
+
+        for ((color, label) in legendEntries) {
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(8, 4, 12, 4)
+                background = getDrawable(R.drawable.color_popup_background)
+                isClickable = true
+                isFocusable = true
+            }
+
+            val colorView = View(this).apply {
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    shape = android.graphics.drawable.GradientDrawable.OVAL
+                    setColor(color)
+                    setStroke(1, Color.GRAY)
+                }
+            }
+
+            item.addView(
+                colorView,
+                LinearLayout.LayoutParams(
+                    (16 * resources.displayMetrics.density).toInt(),
+                    (16 * resources.displayMetrics.density).toInt()
+                )
+            )
+
+            val labelView = TextView(this).apply {
+                text = label
+                textSize = 12f
+                setTextColor(Color.WHITE)
+                setPadding(6, 0, 0, 0)
+                maxLines = 1
+            }
+
+            item.addView(labelView)
+
+            item.setOnClickListener {
+                editLegendLabel(color)
+            }
+
+            val params = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+
+            params.marginEnd = (6 * resources.displayMetrics.density).toInt()
+            legendContainer.addView(item, params)
+        }
+    }
+
+    private fun editLegendLabel(color: Int) {
+        val input = EditText(this).apply {
+            setText(legendEntries[color] ?: "")
+            setSelection(text.length)
+            hint = "Enter legend description"
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Edit legend")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val label = input.text.toString().trim()
+                if (label.isNotEmpty()) {
+                    legendEntries[color] = label
+                    updateLegend()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun loadLegend() {
+        legendEntries.clear()
+
+        if (!isSavedMap) return
+
+        val file = File(filesDir, "$mapName.legend")
+        if (!file.exists()) return
+
+        try {
+            file.forEachLine { line ->
+                val parts = line.split("|", limit = 2)
+                if (parts.size == 2) {
+                    val color = parts[0].toLongOrNull()?.toInt()
+                    if (color != null) {
+                        legendEntries[color] = parts[1]
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("MapView", "Legend load failed", e)
+        }
+    }
+
+    private fun saveLegend(fileName: String) {
+        try {
+            val file = File(filesDir, "$fileName.legend")
+            file.writeText(
+                legendEntries.entries.joinToString("\n") {
+                    "${it.key}|${it.value.replace("\n", " ")}"
+                }
+            )
+        } catch (e: Exception) {
+            Log.e("MapView", "Legend save failed", e)
         }
     }
 
@@ -326,12 +530,16 @@ class MapViewActivity : AppCompatActivity() {
             drawing.draw(canvas)
             canvas.restore()
 
-            val file = File(filesDir, "saved_$safeName.png")
+            val savedFileName = "saved_$safeName"
+            val file = File(filesDir, "$savedFileName.png")
+
             FileOutputStream(file).use {
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
             }
 
-            Toast.makeText(this, "Saved as saved_$safeName.png", Toast.LENGTH_SHORT).show()
+            saveLegend(savedFileName)
+
+            Toast.makeText(this, "Saved as $savedFileName.png", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Log.e("MapView", "Save failed", e)
             Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()

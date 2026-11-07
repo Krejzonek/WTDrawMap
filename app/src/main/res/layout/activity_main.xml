@@ -68,6 +68,25 @@
 
         </FrameLayout>
 
+        <HorizontalScrollView
+            android:id="@+id/MapLegendScroll"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:layout_marginEnd="10dp"
+            android:layout_marginTop="8dp"
+            android:scrollbars="none"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/MapLegend"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal" />
+
+        </HorizontalScrollView>
+
         <Button
             android:id="@+id/Edit"
             android:layout_width="wrap_content"
