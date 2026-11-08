@@ -17,9 +17,17 @@ import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.sqrt
+
+private data class TacticalPlan(
+    val id: String,
+    var name: String,
+    val drawing: DrawingView
+)
 
 class MapViewActivity : AppCompatActivity() {
 
@@ -37,11 +45,19 @@ class MapViewActivity : AppCompatActivity() {
     private lateinit var undoButton: Button
     private lateinit var redoButton: Button
     private lateinit var legendContainer: LinearLayout
+    private lateinit var tacticSpinner: Spinner
+    private lateinit var addTacticButton: Button
+    private lateinit var renameTacticButton: Button
+    private lateinit var deleteTacticButton: Button
 
-    private var drawingView: DrawingView? = null
+    private val tactics = mutableListOf<TacticalPlan>()
+    private val legendEntries = linkedMapOf<Int, String>()
+
+    private var activeTacticIndex = 0
     private var isSavedMap = false
     private var isDrawingMode = false
     private var isZoomMode = false
+    private var isChangingSpinner = false
 
     private var currentZoom = 1f
     private val minZoom = 1f
@@ -51,7 +67,8 @@ class MapViewActivity : AppCompatActivity() {
     private var lastY = 0f
     private var lastPinchDistance = 0f
 
-    private val legendEntries = linkedMapOf<Int, String>()
+    private val activeDrawing: DrawingView?
+        get() = tactics.getOrNull(activeTacticIndex)?.drawing
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,28 +97,18 @@ class MapViewActivity : AppCompatActivity() {
         undoButton = findViewById(R.id.Undo)
         redoButton = findViewById(R.id.Redo)
         legendContainer = findViewById(R.id.legendContainer)
+        tacticSpinner = findViewById(R.id.tacticSpinner)
+        addTacticButton = findViewById(R.id.AddTactic)
+        renameTacticButton = findViewById(R.id.RenameTactic)
+        deleteTacticButton = findViewById(R.id.DeleteTactic)
 
         loadImage()
 
         mapContent.pivotX = 0f
         mapContent.pivotY = 0f
 
-        drawingView = DrawingView(this)
-        mapContent.addView(
-            drawingView,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        )
-
-        drawingView?.onColorUsed = { color ->
-            addLegendColor(color)
-        }
-
-        drawingView?.onHistoryChanged = {
-            updateHistoryButtons()
-        }
+        loadLegend()
+        loadTactics()
 
         mapContent.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             updateDrawingBounds()
@@ -113,19 +120,11 @@ class MapViewActivity : AppCompatActivity() {
 
         mapContent.post {
             updateDrawingBounds()
+            loadTacticDrawings()
         }
 
-        loadLegend()
-        updateLegend()
-        updateHistoryButtons()
-
-        val colorRed = findViewById<View>(R.id.colorRed)
-        val colorGreen = findViewById<View>(R.id.colorGreen)
-        val colorBlue = findViewById<View>(R.id.colorBlue)
-        val colorYellow = findViewById<View>(R.id.colorYellow)
-        val colorOrange = findViewById<View>(R.id.colorOrange)
-        val colorPurple = findViewById<View>(R.id.colorPurple)
-        val colorWhite = findViewById<View>(R.id.colorWhite)
+        setupColorButtons()
+        setupTacticControls()
 
         mapFrame.isClickable = true
         mapFrame.setOnTouchListener { _, event ->
@@ -140,47 +139,39 @@ class MapViewActivity : AppCompatActivity() {
         drawButton.setOnClickListener {
             isZoomMode = false
             isDrawingMode = true
-            drawingView?.isDrawingEnabled = true
-            drawingView?.setEraseMode(false)
-            drawingView?.setColor(Color.BLUE)
+            activeDrawing?.isDrawingEnabled = true
+            activeDrawing?.setEraseMode(false)
+            activeDrawing?.setColor(Color.BLUE)
             colorButtons.visibility = View.VISIBLE
             updateZoomButton()
         }
 
         eraseButton.setOnClickListener {
             if (isDrawingMode && !isZoomMode) {
-                drawingView?.isDrawingEnabled = true
-                drawingView?.setEraseMode(true)
+                activeDrawing?.isDrawingEnabled = true
+                activeDrawing?.setEraseMode(true)
                 colorButtons.visibility = View.GONE
             } else {
                 Toast.makeText(this, "Press Draw first", Toast.LENGTH_SHORT).show()
             }
         }
 
-        colorRed.setOnClickListener { selectColor(Color.RED) }
-        colorGreen.setOnClickListener { selectColor(Color.GREEN) }
-        colorBlue.setOnClickListener { selectColor(Color.BLUE) }
-        colorYellow.setOnClickListener { selectColor(Color.YELLOW) }
-        colorOrange.setOnClickListener { selectColor(Color.rgb(255, 140, 0)) }
-        colorPurple.setOnClickListener { selectColor(Color.rgb(160, 70, 220)) }
-        colorWhite.setOnClickListener { selectColor(Color.WHITE) }
-
         undoButton.setOnClickListener {
-            drawingView?.undo()
+            activeDrawing?.undo()
             updateHistoryButtons()
         }
 
         redoButton.setOnClickListener {
-            drawingView?.redo()
+            activeDrawing?.redo()
             updateHistoryButtons()
         }
 
         clearAll.setOnClickListener {
             AlertDialog.Builder(this)
-                .setTitle("Clear all drawings?")
-                .setMessage("Are you sure you want to delete all drawings?")
+                .setTitle("Clear this tactic?")
+                .setMessage("Are you sure you want to delete all drawings from this tactic?")
                 .setPositiveButton("Clear") { _, _ ->
-                    drawingView?.clearDrawing()
+                    activeDrawing?.clearDrawing()
                     updateHistoryButtons()
                 }
                 .setNegativeButton("Cancel", null)
@@ -189,7 +180,7 @@ class MapViewActivity : AppCompatActivity() {
 
         zoomButton.setOnClickListener {
             isZoomMode = !isZoomMode
-            drawingView?.isDrawingEnabled = isDrawingMode && !isZoomMode
+            activeDrawing?.isDrawingEnabled = isDrawingMode && !isZoomMode
 
             if (isZoomMode) {
                 colorButtons.visibility = View.GONE
@@ -199,7 +190,11 @@ class MapViewActivity : AppCompatActivity() {
         }
 
         saveButton.setOnClickListener {
-            showSaveDialog()
+            if (isSavedMap) {
+                saveDrawing(mapName)
+            } else {
+                showSaveDialog()
+            }
         }
 
         back.setOnClickListener {
@@ -214,11 +209,308 @@ class MapViewActivity : AppCompatActivity() {
                 .setNegativeButton("No", null)
                 .show()
         }
+
+        updateLegend()
+        updateHistoryButtons()
+    }
+
+    private fun setupColorButtons() {
+        findViewById<View>(R.id.colorRed).setOnClickListener { selectColor(Color.RED) }
+        findViewById<View>(R.id.colorGreen).setOnClickListener { selectColor(Color.GREEN) }
+        findViewById<View>(R.id.colorBlue).setOnClickListener { selectColor(Color.BLUE) }
+        findViewById<View>(R.id.colorYellow).setOnClickListener { selectColor(Color.YELLOW) }
+        findViewById<View>(R.id.colorOrange).setOnClickListener { selectColor(Color.rgb(255, 140, 0)) }
+        findViewById<View>(R.id.colorPurple).setOnClickListener { selectColor(Color.rgb(160, 70, 220)) }
+        findViewById<View>(R.id.colorWhite).setOnClickListener { selectColor(Color.WHITE) }
+    }
+
+    private fun setupTacticControls() {
+        addTacticButton.setOnClickListener {
+            showTacticDialog()
+        }
+
+        renameTacticButton.setOnClickListener {
+            val tactic = tactics.getOrNull(activeTacticIndex) ?: return@setOnClickListener
+            showTacticDialog(tactic.name)
+        }
+
+        deleteTacticButton.setOnClickListener {
+            deleteActiveTactic()
+        }
+
+        tacticSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (isChangingSpinner || position !in tactics.indices) return
+                selectTactic(position)
+            }
+        }
+
+        updateTacticSpinner()
+    }
+
+    private fun createTactic(id: String, name: String): TacticalPlan {
+        val drawing = DrawingView(this)
+
+        drawing.isDrawingEnabled = false
+        drawing.onColorUsed = { color ->
+            addLegendColor(color)
+        }
+        drawing.onHistoryChanged = {
+            if (activeDrawing === drawing) updateHistoryButtons()
+        }
+
+        mapContent.addView(
+            drawing,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+
+        drawing.setDrawingBounds(getCurrentDrawingBounds())
+
+        return TacticalPlan(id, name, drawing)
+    }
+
+    private fun loadTactics() {
+        tactics.clear()
+
+        if (isSavedMap) {
+            val file = File(filesDir, "$mapName.tactics.json")
+
+            if (file.exists()) {
+                try {
+                    val json = JSONObject(file.readText())
+                    val array = json.getJSONArray("tactics")
+
+                    for (i in 0 until array.length()) {
+                        val item = array.getJSONObject(i)
+                        tactics.add(
+                            createTactic(
+                                item.getString("id"),
+                                item.getString("name")
+                            )
+                        )
+                    }
+
+                    activeTacticIndex = json.optInt("active", 0)
+
+                    val requestedTacticId = intent.getStringExtra("ACTIVE_TACTIC_ID")
+
+                    if (!requestedTacticId.isNullOrBlank()) {
+                        val requestedIndex = tactics.indexOfFirst {
+                            it.id == requestedTacticId
+                        }
+
+                        if (requestedIndex >= 0) {
+                            activeTacticIndex = requestedIndex
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("MapView", "Tactics load failed", e)
+                }
+            }
+        }
+
+        if (tactics.isEmpty()) {
+            tactics.add(createTactic("t0", "Tactic 1"))
+            activeTacticIndex = 0
+        }
+
+        activeTacticIndex = activeTacticIndex.coerceIn(0, tactics.lastIndex)
+
+        tactics.forEachIndexed { index, tactic ->
+            tactic.drawing.visibility = if (index == activeTacticIndex) View.VISIBLE else View.GONE
+            tactic.drawing.isDrawingEnabled = false
+        }
+
+        updateTacticSpinner()
+    }
+
+    private fun loadTacticDrawings() {
+        if (!isSavedMap) return
+
+        for (tactic in tactics) {
+            val vectorFile = File(filesDir, "$mapName.${tactic.id}.json")
+
+            if (vectorFile.exists()) {
+                try {
+                    tactic.drawing.importActions(
+                        JSONArray(vectorFile.readText())
+                    )
+                } catch (e: Exception) {
+                    Log.e("MapView", "Vector drawing load failed", e)
+                }
+            } else {
+                val file = File(filesDir, "$mapName.${tactic.id}.png")
+                if (!file.exists()) continue
+
+                val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: continue
+                tactic.drawing.loadBitmap(bitmap)
+            }
+
+            tactic.drawing.setDrawingBounds(getCurrentDrawingBounds())
+        }
+
+        updateHistoryButtons()
+    }
+
+    private fun updateTacticSpinner() {
+        if (!::tacticSpinner.isInitialized) return
+
+        isChangingSpinner = true
+
+        val adapter = object : ArrayAdapter<String>(
+            this,
+            android.R.layout.simple_spinner_item,
+            tactics.map { it.name }
+        ) {
+            private fun createTextView(text: String): TextView {
+                return TextView(this@MapViewActivity).apply {
+                    this.text = text
+                    textSize = 14f
+                    setTextColor(Color.WHITE)
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                    setPadding(
+                        (12 * resources.displayMetrics.density).toInt(),
+                        0,
+                        (8 * resources.displayMetrics.density).toInt(),
+                        0
+                    )
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(getColor(R.color.dark_button))
+                        cornerRadius = 6 * resources.displayMetrics.density
+                    }
+                    minHeight = (40 * resources.displayMetrics.density).toInt()
+                }
+            }
+
+            override fun getView(position: Int, convertView: View?, parent: android.view.ViewGroup): View {
+                return createTextView(getItem(position) ?: "")
+            }
+
+            override fun getDropDownView(position: Int, convertView: View?, parent: android.view.ViewGroup): View {
+                return createTextView(getItem(position) ?: "").apply {
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(getColor(R.color.dark_button))
+                    }
+                }
+            }
+        }
+
+        tacticSpinner.adapter = adapter
+
+        if (tactics.isNotEmpty()) {
+            tacticSpinner.setSelection(activeTacticIndex, false)
+        }
+
+        isChangingSpinner = false
+    }
+
+    private fun selectTactic(index: Int) {
+        if (index !in tactics.indices) return
+
+        tactics.forEach {
+            it.drawing.isDrawingEnabled = false
+            it.drawing.visibility = View.GONE
+        }
+
+        activeTacticIndex = index
+
+        val drawing = tactics[index].drawing
+        drawing.visibility = View.VISIBLE
+        drawing.isDrawingEnabled = isDrawingMode && !isZoomMode
+        drawing.setDrawingBounds(getCurrentDrawingBounds())
+
+        colorButtons.visibility = if (isDrawingMode && !isZoomMode) View.VISIBLE else View.GONE
+
+        updateHistoryButtons()
+    }
+
+    private fun showTacticDialog(oldName: String? = null) {
+        val input = EditText(this).apply {
+            hint = "Tactic name"
+            if (oldName != null) setText(oldName)
+            setSelection(text.length)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(if (oldName == null) "New tactic" else "Rename tactic")
+            .setView(input)
+            .setPositiveButton(if (oldName == null) "Create" else "Save") { _, _ ->
+                val name = input.text.toString().trim()
+
+                if (name.isEmpty()) {
+                    Toast.makeText(this, "Enter a tactic name", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+
+                if (oldName == null) {
+                    val id = "t${System.currentTimeMillis()}"
+                    tactics.add(createTactic(id, name))
+                    activeTacticIndex = tactics.lastIndex
+                    selectTactic(activeTacticIndex)
+                    updateTacticSpinner()
+                } else {
+                    tactics.getOrNull(activeTacticIndex)?.name = name
+                    updateTacticSpinner()
+                }
+
+                if (isSavedMap) {
+                    saveTacticMetadata()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun deleteActiveTactic() {
+        if (tactics.size <= 1) {
+            Toast.makeText(this, "At least one tactic is required", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val tactic = tactics.getOrNull(activeTacticIndex) ?: return
+
+        AlertDialog.Builder(this)
+            .setTitle("Delete tactic?")
+            .setMessage("Delete \"${tactic.name}\"?")
+            .setPositiveButton("Delete") { _, _ ->
+                mapContent.removeView(tactic.drawing)
+                tactics.removeAt(activeTacticIndex)
+
+                File(filesDir, "$mapName.${tactic.id}.png").delete()
+                File(filesDir, "$mapName.${tactic.id}.json").delete()
+                File(filesDir, "$mapName.${tactic.id}.bin").delete()
+
+                activeTacticIndex = activeTacticIndex.coerceAtMost(tactics.lastIndex)
+
+                tactics.forEachIndexed { index, item ->
+                    item.drawing.visibility = if (index == activeTacticIndex) View.VISIBLE else View.GONE
+                    item.drawing.isDrawingEnabled = false
+                }
+
+                updateTacticSpinner()
+                selectTactic(activeTacticIndex)
+                saveTacticMetadata()
+                updateHistoryButtons()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun updateDrawingBounds() {
-        val drawable = imageView.drawable ?: return
-        if (imageView.width <= 0 || imageView.height <= 0) return
+        val bounds = getCurrentDrawingBounds()
+        tactics.forEach {
+            it.drawing.setDrawingBounds(bounds)
+        }
+    }
+
+    private fun getCurrentDrawingBounds(): RectF {
+        val drawable = imageView.drawable ?: return RectF()
+        if (imageView.width <= 0 || imageView.height <= 0) return RectF()
 
         val bounds = RectF(
             0f,
@@ -228,19 +520,18 @@ class MapViewActivity : AppCompatActivity() {
         )
 
         imageView.imageMatrix.mapRect(bounds)
-
-        drawingView?.setDrawingBounds(bounds)
+        return bounds
     }
 
     private fun selectColor(color: Int) {
-        drawingView?.setColor(color)
-        drawingView?.setEraseMode(false)
+        activeDrawing?.setColor(color)
+        activeDrawing?.setEraseMode(false)
         colorButtons.visibility = View.GONE
     }
 
     private fun updateHistoryButtons() {
-        undoButton.isEnabled = drawingView?.canUndo() == true
-        redoButton.isEnabled = drawingView?.canRedo() == true
+        undoButton.isEnabled = activeDrawing?.canUndo() == true
+        redoButton.isEnabled = activeDrawing?.canRedo() == true
         undoButton.alpha = if (undoButton.isEnabled) 1f else 0.4f
         redoButton.alpha = if (redoButton.isEnabled) 1f else 0.4f
     }
@@ -286,12 +577,11 @@ class MapViewActivity : AppCompatActivity() {
                 }
             }
 
+            val size = (16 * resources.displayMetrics.density).toInt()
+
             item.addView(
                 colorView,
-                LinearLayout.LayoutParams(
-                    (16 * resources.displayMetrics.density).toInt(),
-                    (16 * resources.displayMetrics.density).toInt()
-                )
+                LinearLayout.LayoutParams(size, size)
             )
 
             val labelView = TextView(this).apply {
@@ -330,6 +620,7 @@ class MapViewActivity : AppCompatActivity() {
             .setView(input)
             .setPositiveButton("Save") { _, _ ->
                 val label = input.text.toString().trim()
+
                 if (label.isNotEmpty()) {
                     legendEntries[color] = label
                     updateLegend()
@@ -350,6 +641,7 @@ class MapViewActivity : AppCompatActivity() {
         try {
             file.forEachLine { line ->
                 val parts = line.split("|", limit = 2)
+
                 if (parts.size == 2) {
                     val color = parts[0].toLongOrNull()?.toInt()
                     if (color != null) {
@@ -372,6 +664,29 @@ class MapViewActivity : AppCompatActivity() {
             )
         } catch (e: Exception) {
             Log.e("MapView", "Legend save failed", e)
+        }
+    }
+
+    private fun saveTacticMetadata(fileName: String = mapName) {
+        try {
+            val json = JSONObject()
+            val array = JSONArray()
+
+            tactics.forEach {
+                array.put(
+                    JSONObject().apply {
+                        put("id", it.id)
+                        put("name", it.name)
+                    }
+                )
+            }
+
+            json.put("tactics", array)
+            json.put("active", activeTacticIndex)
+
+            File(filesDir, "$fileName.tactics.json").writeText(json.toString())
+        } catch (e: Exception) {
+            Log.e("MapView", "Tactics metadata save failed", e)
         }
     }
 
@@ -463,15 +778,40 @@ class MapViewActivity : AppCompatActivity() {
 
     private fun loadImage() {
         if (isSavedMap) {
-            val file = File(filesDir, "$mapName.png")
-            if (file.exists()) {
-                val bitmap = BitmapFactory.decodeFile(file.absolutePath)
-                imageView.setImageBitmap(bitmap)
-            } else {
-                Log.e("MapView", "Saved file not found: $mapName.png")
+            val baseFile = File(filesDir, "$mapName.base.png")
+            val sourceFile = File(filesDir, "$mapName.source")
+            val mapFile = File(filesDir, "$mapName.png")
+
+            when {
+                baseFile.exists() -> {
+                    val bitmap = BitmapFactory.decodeFile(baseFile.absolutePath)
+                    if (bitmap != null) imageView.setImageBitmap(bitmap)
+                }
+
+                sourceFile.exists() -> {
+                    val sourceName = sourceFile.readText().trim()
+                    val resId = resources.getIdentifier(sourceName, "drawable", packageName)
+
+                    if (resId != 0) {
+                        imageView.setImageResource(resId)
+                    } else if (mapFile.exists()) {
+                        val bitmap = BitmapFactory.decodeFile(mapFile.absolutePath)
+                        if (bitmap != null) imageView.setImageBitmap(bitmap)
+                    } else {
+                        Log.e("MapView", "Source drawable not found: $sourceName")
+                    }
+                }
+
+                mapFile.exists() -> {
+                    val bitmap = BitmapFactory.decodeFile(mapFile.absolutePath)
+                    if (bitmap != null) imageView.setImageBitmap(bitmap)
+                }
+
+                else -> Log.e("MapView", "Saved file not found: $mapName")
             }
         } else {
             val resId = resources.getIdentifier(mapName, "drawable", packageName)
+
             if (resId != 0) {
                 imageView.setImageResource(resId)
             } else {
@@ -481,26 +821,42 @@ class MapViewActivity : AppCompatActivity() {
     }
 
     private fun showSaveDialog() {
-        val editText = EditText(this)
+        val editText = EditText(this).apply {
+            hint = "Map name"
+        }
 
         AlertDialog.Builder(this)
             .setTitle("Save Drawing")
-            .setMessage("Enter file name:")
+            .setMessage("Enter map name:")
             .setView(editText)
             .setPositiveButton("Save") { _, _ ->
-                val name = editText.text.toString()
-                if (name.isNotBlank()) saveDrawing(name)
+                val name = editText.text.toString().trim()
+
+                if (name.isNotBlank()) {
+                    saveDrawing(name)
+                } else {
+                    Toast.makeText(this, "Enter a map name", Toast.LENGTH_SHORT).show()
+                }
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
     private fun saveDrawing(fileName: String) {
-        val safeName = fileName.trim().replace("[^a-zA-Z0-9_]".toRegex(), "_")
-        val drawable = imageView.drawable
-        val drawing = drawingView
+        val safeName = fileName.trim()
+            .replace(Regex("[^a-zA-Z0-9_]+"), "_")
+            .trim('_')
+            .ifBlank { "Map" }
 
-        if (drawable == null || drawing == null) {
+        val savedFileName = if (isSavedMap) {
+            mapName
+        } else {
+            "saved_$safeName"
+        }
+
+        val drawable = imageView.drawable
+
+        if (drawable == null || mapContent.width <= 0 || mapContent.height <= 0) {
             Toast.makeText(this, "Map could not be saved", Toast.LENGTH_SHORT).show()
             return
         }
@@ -508,43 +864,104 @@ class MapViewActivity : AppCompatActivity() {
         val originalWidth = drawable.intrinsicWidth
         val originalHeight = drawable.intrinsicHeight
 
-        if (originalWidth <= 0 || originalHeight <= 0 || drawing.width <= 0 || drawing.height <= 0) {
+        if (originalWidth <= 0 || originalHeight <= 0) {
             Toast.makeText(this, "Invalid map dimensions", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val bitmap = Bitmap.createBitmap(originalWidth, originalHeight, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
+        val baseBitmap = Bitmap.createBitmap(
+            originalWidth,
+            originalHeight,
+            Bitmap.Config.ARGB_8888
+        )
 
         try {
+            val baseCanvas = Canvas(baseBitmap)
             drawable.setBounds(0, 0, originalWidth, originalHeight)
-            drawable.draw(canvas)
+            drawable.draw(baseCanvas)
 
-            val inverseMatrix = android.graphics.Matrix()
-            if (!imageView.imageMatrix.invert(inverseMatrix)) {
-                throw IllegalStateException("Unable to calculate map coordinates")
+            FileOutputStream(File(filesDir, "$savedFileName.base.png")).use {
+                baseBitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
             }
 
-            canvas.save()
-            canvas.concat(inverseMatrix)
-            drawing.draw(canvas)
-            canvas.restore()
+            if (!isSavedMap) {
+                File(filesDir, "$savedFileName.source").writeText(mapName)
+            } else {
+                val sourceFile = File(filesDir, "$mapName.source")
 
-            val savedFileName = "saved_$safeName"
-            val file = File(filesDir, "$savedFileName.png")
-
-            FileOutputStream(file).use {
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+                if (sourceFile.exists()) {
+                    File(filesDir, "$savedFileName.source").writeText(sourceFile.readText())
+                } else {
+                    File(filesDir, "$savedFileName.source").delete()
+                }
             }
+
+            val preview = baseBitmap.copy(Bitmap.Config.ARGB_8888, true)
+            val previewCanvas = Canvas(preview)
+
+            for (tactic in tactics) {
+                val vectorFile = File(filesDir, "$savedFileName.${tactic.id}.json")
+                vectorFile.writeText(tactic.drawing.exportActions().toString())
+
+                val overlay = Bitmap.createBitmap(
+                    mapContent.width,
+                    mapContent.height,
+                    Bitmap.Config.ARGB_8888
+                )
+
+                tactic.drawing.draw(Canvas(overlay))
+
+                val inverseMatrix = android.graphics.Matrix()
+
+                if (!imageView.imageMatrix.invert(inverseMatrix)) {
+                    overlay.recycle()
+                    throw IllegalStateException("Unable to calculate map coordinates")
+                }
+
+                val originalOverlay = Bitmap.createBitmap(
+                    originalWidth,
+                    originalHeight,
+                    Bitmap.Config.ARGB_8888
+                )
+
+                val overlayCanvas = Canvas(originalOverlay)
+                overlayCanvas.concat(inverseMatrix)
+                overlayCanvas.drawBitmap(overlay, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG))
+
+                FileOutputStream(File(filesDir, "$savedFileName.${tactic.id}.png")).use {
+                    originalOverlay.compress(Bitmap.CompressFormat.PNG, 100, it)
+                }
+
+                if (tactic === tactics.getOrNull(activeTacticIndex)) {
+                    previewCanvas.drawBitmap(originalOverlay, 0f, 0f, null)
+                }
+
+                overlay.recycle()
+                originalOverlay.recycle()
+            }
+
+            FileOutputStream(File(filesDir, "$savedFileName.png")).use {
+                preview.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+
+            preview.recycle()
 
             saveLegend(savedFileName)
+            saveTacticMetadata(savedFileName)
 
-            Toast.makeText(this, "Saved as $savedFileName.png", Toast.LENGTH_SHORT).show()
+            mapName = savedFileName
+            isSavedMap = true
+
+            Toast.makeText(
+                this,
+                "Map saved successfully",
+                Toast.LENGTH_SHORT
+            ).show()
         } catch (e: Exception) {
             Log.e("MapView", "Save failed", e)
             Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
         } finally {
-            bitmap.recycle()
+            baseBitmap.recycle()
         }
     }
 }
