@@ -12,6 +12,7 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:minHeight="48dp"
         android:orientation="horizontal"
         android:gravity="center_vertical"
         android:background="@color/dark_surface">
@@ -20,6 +21,7 @@
             android:id="@+id/Back"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:minHeight="44dp"
             android:layout_marginStart="5dp"
             android:backgroundTint="@color/dark_button"
             android:textColor="@color/white"
@@ -35,6 +37,7 @@
             android:id="@+id/Save"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:minHeight="44dp"
             android:layout_marginEnd="5dp"
             android:backgroundTint="@color/dark_button"
             android:textColor="@color/white"
@@ -70,72 +73,128 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="top|end"
-            android:layout_margin="16dp"
+            android:layout_margin="8dp"
             android:background="@drawable/color_popup_background"
             android:elevation="6dp"
             android:orientation="horizontal"
-            android:padding="6dp"
+            android:padding="4dp"
             android:visibility="gone">
 
             <View
                 android:id="@+id/colorRed"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:layout_margin="5dp"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_margin="4dp"
                 android:background="@drawable/color_circle"
                 android:backgroundTint="#FF0000" />
 
             <View
                 android:id="@+id/colorGreen"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:layout_margin="5dp"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_margin="4dp"
                 android:background="@drawable/color_circle"
                 android:backgroundTint="#00FF00" />
 
             <View
                 android:id="@+id/colorBlue"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:layout_margin="5dp"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_margin="4dp"
                 android:background="@drawable/color_circle"
                 android:backgroundTint="#0000FF" />
 
             <View
                 android:id="@+id/colorYellow"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:layout_margin="5dp"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_margin="4dp"
                 android:background="@drawable/color_circle"
                 android:backgroundTint="#FFFF00" />
 
             <View
                 android:id="@+id/colorOrange"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:layout_margin="5dp"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_margin="4dp"
                 android:background="@drawable/color_circle"
                 android:backgroundTint="#FF8C00" />
 
             <View
                 android:id="@+id/colorPurple"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:layout_margin="5dp"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_margin="4dp"
                 android:background="@drawable/color_circle"
                 android:backgroundTint="#A046DC" />
 
             <View
                 android:id="@+id/colorWhite"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:layout_margin="5dp"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_margin="4dp"
                 android:background="@drawable/color_circle"
                 android:backgroundTint="#FFFFFF" />
 
         </LinearLayout>
 
     </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="48dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="5dp"
+        android:paddingEnd="5dp"
+        android:background="@color/dark_surface">
+
+        <Spinner
+            android:id="@+id/tacticSpinner"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:backgroundTint="@color/dark_button"
+            android:spinnerMode="dropdown" />
+
+        <Button
+            android:id="@+id/AddTactic"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:backgroundTint="@color/dark_button"
+            android:textColor="@color/white"
+            android:text="+"
+            android:textSize="18sp" />
+
+        <Button
+            android:id="@+id/RenameTactic"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:minWidth="0dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:backgroundTint="@color/dark_button"
+            android:textColor="@color/white"
+            android:text="Rename"
+            android:textSize="10sp" />
+
+        <Button
+            android:id="@+id/DeleteTactic"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:minWidth="0dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:backgroundTint="@color/dark_button"
+            android:textColor="@color/white"
+            android:text="Delete"
+            android:textSize="10sp" />
+
+    </LinearLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -171,8 +230,8 @@
 
         <Button
             android:id="@+id/Undo"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
             android:minWidth="0dp"
             android:padding="0dp"
             android:backgroundTint="@color/dark_button"
@@ -180,14 +239,14 @@
             android:text=""
             app:icon="@drawable/ic_undo"
             app:iconTint="@color/white"
-            app:iconSize="24dp"
+            app:iconSize="22dp"
             app:iconPadding="0dp"
             app:iconGravity="textStart" />
 
         <Button
             android:id="@+id/Redo"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
             android:layout_marginStart="5dp"
             android:minWidth="0dp"
             android:padding="0dp"
@@ -196,7 +255,7 @@
             android:text=""
             app:icon="@drawable/ic_redo"
             app:iconTint="@color/white"
-            app:iconSize="24dp"
+            app:iconSize="22dp"
             app:iconPadding="0dp"
             app:iconGravity="textStart" />
 
@@ -204,7 +263,7 @@
 
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="60dp"
+        android:layout_height="56dp"
         android:background="@color/dark_surface"
         android:orientation="horizontal">
 
@@ -212,7 +271,7 @@
             android:id="@+id/draw"
             style="@style/Widget.Material3.Button"
             android:layout_width="0dp"
-            android:layout_height="60dp"
+            android:layout_height="match_parent"
             android:layout_weight="1"
             android:backgroundTint="@color/dark_button"
             android:textColor="@color/white"
@@ -224,15 +283,15 @@
             android:textSize="11sp"
             app:icon="@drawable/ic_pen"
             app:iconTint="@color/white"
-            app:iconSize="18dp"
-            app:iconPadding="3dp"
+            app:iconSize="16dp"
+            app:iconPadding="2dp"
             app:iconGravity="textStart" />
 
         <Button
             android:id="@+id/Erser"
             style="@style/Widget.Material3.Button"
             android:layout_width="0dp"
-            android:layout_height="60dp"
+            android:layout_height="match_parent"
             android:layout_weight="1"
             android:backgroundTint="@color/dark_button"
             android:textColor="@color/white"
@@ -244,15 +303,15 @@
             android:textSize="11sp"
             app:icon="@drawable/ic_eraser"
             app:iconTint="@color/white"
-            app:iconSize="18dp"
-            app:iconPadding="3dp"
+            app:iconSize="16dp"
+            app:iconPadding="2dp"
             app:iconGravity="textStart" />
 
         <Button
             android:id="@+id/ClearAll"
             style="@style/Widget.Material3.Button"
             android:layout_width="0dp"
-            android:layout_height="60dp"
+            android:layout_height="match_parent"
             android:layout_weight="1"
             android:backgroundTint="@color/dark_button"
             android:textColor="@color/white"
@@ -261,18 +320,18 @@
             android:paddingEnd="2dp"
             android:singleLine="true"
             android:text="Clear All"
-            android:textSize="11sp"
+            android:textSize="10sp"
             app:icon="@drawable/ic_eraser"
             app:iconTint="@color/white"
-            app:iconSize="18dp"
-            app:iconPadding="3dp"
+            app:iconSize="16dp"
+            app:iconPadding="2dp"
             app:iconGravity="textStart" />
 
         <Button
             android:id="@+id/Zoom"
             style="@style/Widget.Material3.Button"
             android:layout_width="0dp"
-            android:layout_height="60dp"
+            android:layout_height="match_parent"
             android:layout_weight="1"
             android:backgroundTint="@color/dark_button"
             android:textColor="@color/white"
@@ -285,8 +344,8 @@
             android:contentDescription="Zoom"
             app:icon="@drawable/ic_zoom"
             app:iconTint="@color/white"
-            app:iconSize="18dp"
-            app:iconPadding="3dp"
+            app:iconSize="16dp"
+            app:iconPadding="2dp"
             app:iconGravity="textStart" />
 
     </LinearLayout>

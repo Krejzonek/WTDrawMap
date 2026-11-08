@@ -30,7 +30,8 @@
         <AutoCompleteTextView
             android:id="@+id/SearchMap"
             android:layout_width="match_parent"
-            android:layout_height="52dp"
+            android:layout_height="wrap_content"
+            android:minHeight="52dp"
             android:layout_margin="10dp"
             android:background="@drawable/dark_input_background"
             android:hint="Search maps..."
@@ -45,8 +46,11 @@
 
         <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="380dp"
-            android:layout_marginTop="20dp">
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:layout_marginStart="10dp"
+            android:layout_marginEnd="10dp"
+            android:layout_marginTop="8dp">
 
             <ImageView
                 android:id="@+id/Map"
@@ -55,6 +59,15 @@
                 android:adjustViewBounds="true"
                 android:contentDescription="Map"
                 android:scaleType="fitCenter" />
+
+            <ImageView
+                android:id="@+id/MapTacticOverlay"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:adjustViewBounds="true"
+                android:contentDescription="Tactic drawing"
+                android:scaleType="fitCenter"
+                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/SearchMapHint"
@@ -67,6 +80,17 @@
                 android:visibility="visible" />
 
         </FrameLayout>
+
+        <Spinner
+            android:id="@+id/MapTacticSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="45dp"
+            android:layout_marginStart="10dp"
+            android:layout_marginEnd="10dp"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/dark_input_background"
+            android:visibility="gone" />
 
         <HorizontalScrollView
             android:id="@+id/MapLegendScroll"
@@ -87,32 +111,56 @@
 
         </HorizontalScrollView>
 
-        <Button
-            android:id="@+id/Edit"
-            android:layout_width="wrap_content"
-            android:layout_height="80dp"
-            android:layout_gravity="center"
-            android:backgroundTint="@color/dark_button"
-            android:text="Edit"
-            android:textColor="@color/white"
-            app:icon="@android:drawable/ic_menu_edit"
-            app:iconTint="@color/white"
-            app:iconGravity="textStart"
-            app:iconPadding="8dp"
-            android:visibility="gone" />
+        <LinearLayout
+            android:id="@+id/MapActions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <Button
+                android:id="@+id/Edit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:layout_marginEnd="8dp"
+                android:backgroundTint="@color/dark_button"
+                android:text="Edit"
+                android:textColor="@color/white"
+                app:icon="@android:drawable/ic_menu_edit"
+                app:iconTint="@color/white"
+                app:iconGravity="textStart"
+                app:iconPadding="8dp" />
+
+            <Button
+                android:id="@+id/Delete"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:backgroundTint="#B3261E"
+                android:text="Delete"
+                android:textColor="@color/white"
+                app:icon="@android:drawable/ic_menu_delete"
+                app:iconTint="@color/white"
+                app:iconGravity="textStart"
+                app:iconPadding="8dp" />
+
+        </LinearLayout>
 
         <View
             android:id="@+id/view"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1" />
+            android:layout_weight="0.15" />
 
         <Button
             android:id="@+id/Share"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:minHeight="48dp"
             android:layout_gravity="center"
-            android:layout_marginBottom="25dp"
+            android:layout_marginBottom="12dp"
             android:backgroundTint="@color/dark_button"
             android:text="Share"
             android:textColor="@color/white"
