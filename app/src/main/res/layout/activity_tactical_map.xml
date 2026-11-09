@@ -42,10 +42,6 @@
                 android:textSize="20sp"
                 android:textStyle="bold" />
 
-            <View
-                android:layout_width="48dp"
-                android:layout_height="48dp" />
-
         </LinearLayout>
 
         <FrameLayout

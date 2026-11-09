@@ -29,6 +29,7 @@ class TacticalMapActivity : AppCompatActivity() {
     private lateinit var qrData: TextView
     private lateinit var aiStatus: TextView
     private lateinit var aiOverlay: AiSuggestionOverlay
+    private var mapName: String = ""
 
     private var isScanAvailable = true
     private var hasScanned = false
@@ -55,6 +56,7 @@ class TacticalMapActivity : AppCompatActivity() {
         qrData = findViewById(R.id.QRData)
         aiStatus = findViewById(R.id.AIStatus)
         aiOverlay = findViewById(R.id.AIOverlay)
+        mapName = intent.getStringExtra("MAP_NAME") ?: ""
 
         sideMenu.translationX = -280 * resources.displayMetrics.density
 

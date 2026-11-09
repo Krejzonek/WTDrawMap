@@ -34,6 +34,17 @@
             android:layout_weight="1" />
 
         <Button
+            android:id="@+id/View3D"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="44dp"
+            android:layout_marginEnd="4dp"
+            android:backgroundTint="@color/dark_button"
+            android:textColor="@color/white"
+            android:text="3D"
+            android:textSize="14sp" />
+
+        <Button
             android:id="@+id/Save"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -63,8 +74,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:adjustViewBounds="true"
-                android:scaleType="fitCenter"
-                app:srcCompat="@drawable/map_250px_maplayout_conquest1_advancetotherhine_abrbsb" />
+                android:scaleType="fitCenter" />
 
         </FrameLayout>
 
@@ -141,6 +151,7 @@
     </FrameLayout>
 
     <LinearLayout
+        android:id="@+id/tacticControls"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:minHeight="48dp"
@@ -197,6 +208,7 @@
     </LinearLayout>
 
     <LinearLayout
+        android:id="@+id/legendBar"
         android:layout_width="match_parent"
         android:layout_height="54dp"
         android:minHeight="54dp"
@@ -262,6 +274,7 @@
     </LinearLayout>
 
     <LinearLayout
+        android:id="@+id/drawingControls"
         android:layout_width="match_parent"
         android:layout_height="56dp"
         android:background="@color/dark_surface"
