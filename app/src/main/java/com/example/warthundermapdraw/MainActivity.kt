@@ -47,6 +47,7 @@ import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import androidx.activity.result.contract.ActivityResultContracts
 
 class MainActivity : AppCompatActivity() {
 
@@ -67,10 +68,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mapAdapter: ArrayAdapter<MapEntry>
     private lateinit var mapLegend: LinearLayout
     private lateinit var mapLegendScroll: HorizontalScrollView
+    private lateinit var mapModes: LinearLayout
+    private lateinit var mapModesScroll: HorizontalScrollView
 
     private val mapEntries = mutableListOf<MapEntry>()
     private val tacticIds = mutableListOf<String>()
     private var selectedMap: MapEntry? = null
+    private var selectedMapFolder: String? = null
     private var selectedTacticId: String? = null
     private var isChangingTacticSpinner = false
 
@@ -79,10 +83,19 @@ class MainActivity : AppCompatActivity() {
     private data class MapEntry(
         val displayName: String,
         val fileName: String,
-        val isSaved: Boolean
+        val isSaved: Boolean,
+        val assetPath: String = "",
+        val mapFolder: String = "",
+        val modeName: String = ""
     ) {
         override fun toString(): String = displayName
     }
+
+    private data class MapMode(
+        val name: String,
+        val assetPath: String,
+        val fileName: String
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -111,6 +124,8 @@ class MainActivity : AppCompatActivity() {
         tacticMapOption = findViewById(R.id.TacticMapOption)
         mapLegend = findViewById(R.id.MapLegend)
         mapLegendScroll = findViewById(R.id.MapLegendScroll)
+        mapModes = findViewById(R.id.MapModes)
+        mapModesScroll = findViewById(R.id.MapModesScroll)
 
         sideMenu.translationX = -280 * resources.displayMetrics.density
 
@@ -120,7 +135,10 @@ class MainActivity : AppCompatActivity() {
 
         tacticMapOption.setOnClickListener {
             closeMenu()
-            startActivity(Intent(this, TacticalMapActivity::class.java))
+            startActivity(
+                Intent(this, TacticalMapActivity::class.java)
+                    .putExtra("MAP_NAME", selectedMap?.fileName ?: "")
+            )
         }
 
         mapAdapter = ArrayAdapter(this, R.layout.spinner_item, mapEntries)
@@ -131,6 +149,7 @@ class MainActivity : AppCompatActivity() {
         loadMapEntries()
 
         selectedMap = null
+        selectedMapFolder = null
         searchMap.setText("", false)
         image.setImageDrawable(null)
         tacticOverlay.setImageDrawable(null)
@@ -143,6 +162,8 @@ class MainActivity : AppCompatActivity() {
         share.text = "Load"
         mapLegendScroll.visibility = View.GONE
         mapLegend.removeAllViews()
+        mapModesScroll.visibility = View.GONE
+        mapModes.removeAllViews()
 
         searchMap.setOnClickListener {
             searchMap.showDropDown()
@@ -150,7 +171,14 @@ class MainActivity : AppCompatActivity() {
 
         searchMap.setOnItemClickListener { parent, _, position, _ ->
             val entry = parent.getItemAtPosition(position) as MapEntry
-            selectMap(entry)
+
+            if (entry.isSaved) {
+                selectedMapFolder = null
+                mapModesScroll.visibility = View.GONE
+                selectMap(entry)
+            } else {
+                showMapModes(entry)
+            }
 
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             imm.hideSoftInputFromWindow(searchMap.windowToken, 0)
@@ -176,6 +204,7 @@ class MainActivity : AppCompatActivity() {
 
             val intent = Intent(this, MapViewActivity::class.java)
             intent.putExtra("MAP_NAME", entry.fileName)
+            intent.putExtra("MAP_ASSET_PATH", entry.assetPath)
             intent.putExtra("ACTIVE_TACTIC_ID", selectedTacticId)
             startActivity(intent)
         }
@@ -202,33 +231,22 @@ class MainActivity : AppCompatActivity() {
         handleCustomLink(intent)
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        handleCustomLink(intent)
-    }
-
     private fun loadMapEntries() {
         mapEntries.clear()
 
-        val allMapNames = resources.getStringArray(R.array.SelectMap)
+        val folders = assets.list("maps2d") ?: emptyArray()
 
-        for (mapName in allMapNames) {
-            val displayName = mapName
-                .replace(Regex("map_\\d{3}px_maplayout_"), "")
-                .substringBeforeLast("_")
-                .replace("_", " ")
+        for (folder in folders.sorted()) {
+            val modes = assets.list("maps2d/$folder") ?: emptyArray()
 
-            val drawableName = mapName.lowercase()
-                .replace(" ", "")
-                .replaceAfterLast(".", "")
-                .replace(".", "")
+            if (modes.isEmpty()) continue
 
             mapEntries.add(
                 MapEntry(
-                    displayName = displayName,
-                    fileName = drawableName,
-                    isSaved = false
+                    displayName = folder.replace("_", " "),
+                    fileName = folder,
+                    isSaved = false,
+                    mapFolder = folder
                 )
             )
         }
@@ -247,40 +265,101 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshMapSearch() {
-        mapEntries.clear()
+        loadMapEntries()
+        searchMap.setText("", false)
+        searchMap.dismissDropDown()
+    }
 
-        val allMapNames = resources.getStringArray(R.array.SelectMap)
+    private fun getModesForMap(folder: String): List<MapMode> {
+        val result = mutableListOf<MapMode>()
+        val modeFolders = assets.list("maps2d/$folder") ?: return result
 
-        for (mapName in allMapNames) {
-            val displayName = mapName
-                .replace(Regex("map_\\d{3}px_maplayout_"), "")
-                .substringBeforeLast("_")
-                .replace("_", " ")
+        for (mode in modeFolders.sorted()) {
+            val modePath = "maps2d/$folder/$mode"
+            val files = assets.list(modePath) ?: continue
 
-            val drawableName = mapName.lowercase()
-                .replace(" ", "")
-                .replaceAfterLast(".", "")
-                .replace(".", "")
+            val imageFile = files.firstOrNull {
+                it.endsWith(".png", true)
+            } ?: continue
 
-            mapEntries.add(MapEntry(displayName, drawableName, false))
-        }
+            val assetPath = "$modePath/$imageFile"
+            val safeId = "${folder}_${mode}_${imageFile.substringBeforeLast(".")}"
+                .replace(Regex("[^a-zA-Z0-9_-]"), "_")
 
-        for (name in getSavedMaps()) {
-            mapEntries.add(
-                MapEntry(
-                    displayName = "Saved: ${name.replace("_", " ")}",
-                    fileName = "saved_$name",
-                    isSaved = true
+            result.add(
+                MapMode(
+                    name = mode.replace("_", " "),
+                    assetPath = assetPath,
+                    fileName = safeId
                 )
             )
         }
 
-        mapAdapter = ArrayAdapter(this, R.layout.spinner_item, mapEntries)
-        mapAdapter.setDropDownViewResource(R.layout.spinner_item)
-        searchMap.setAdapter(mapAdapter)
-        searchMap.threshold = 1
-        searchMap.setText("", false)
-        searchMap.dismissDropDown()
+        return result
+    }
+
+    private fun showMapModes(entry: MapEntry) {
+        selectedMap = null
+        selectedMapFolder = entry.mapFolder
+
+        searchMap.setText(entry.displayName, false)
+
+        mapModes.removeAllViews()
+        mapModesScroll.visibility = View.VISIBLE
+
+        image.setImageDrawable(null)
+        tacticOverlay.setImageDrawable(null)
+        tacticOverlay.visibility = View.GONE
+        tacticSpinner.visibility = View.GONE
+        mapActions.visibility = View.GONE
+        mapLegendScroll.visibility = View.GONE
+        mapLegend.removeAllViews()
+        searchMapHint.visibility = View.VISIBLE
+        searchMapHint.text = "Select a game mode"
+
+        val modes = getModesForMap(entry.mapFolder)
+
+        if (modes.isEmpty()) {
+            mapModesScroll.visibility = View.GONE
+            Toast.makeText(this, "No maps found for this location", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val density = resources.displayMetrics.density
+
+        for (mode in modes) {
+            val button = Button(this).apply {
+                text = mode.name
+                textSize = 12f
+                isAllCaps = false
+                setTextColor(Color.WHITE)
+                backgroundTintList = android.content.res.ColorStateList.valueOf(
+                    getColor(R.color.dark_button)
+                )
+                setOnClickListener {
+                    val selected = MapEntry(
+                        displayName = "${entry.displayName} - ${mode.name}",
+                        fileName = mode.fileName,
+                        isSaved = false,
+                        assetPath = mode.assetPath,
+                        mapFolder = entry.mapFolder,
+                        modeName = mode.name
+                    )
+
+                    selectMap(selected)
+                }
+            }
+
+            mapModes.addView(
+                button,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    (44 * density).toInt()
+                ).apply {
+                    marginEnd = (6 * density).toInt()
+                }
+            )
+        }
     }
 
     private fun selectMap(entry: MapEntry) {
@@ -289,6 +368,8 @@ class MainActivity : AppCompatActivity() {
         searchMap.setText(entry.displayName, false)
 
         searchMapHint.visibility = View.GONE
+        searchMapHint.text = "Search for a map"
+
         share.text = if (entry.isSaved) "Share" else "Load"
         mapActions.visibility = View.VISIBLE
         delete.visibility = if (entry.isSaved) View.VISIBLE else View.GONE
@@ -304,6 +385,8 @@ class MainActivity : AppCompatActivity() {
 
         if (entry.isSaved) {
             loadTacticOptions(entry)
+        } else {
+            tacticSpinner.visibility = View.GONE
         }
     }
 
@@ -322,7 +405,7 @@ class MainActivity : AppCompatActivity() {
                     it.name == mainFile.name || it.name.startsWith("$fileName.")
                 } ?: emptyList()
 
-                var failedFiles = mutableListOf<String>()
+                val failedFiles = mutableListOf<String>()
 
                 for (file in mapFiles) {
                     if (file.exists() && !file.delete()) {
@@ -332,14 +415,12 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 if (mainFile.exists()) {
-                    Log.e("DELETE_MAP", "Main file still exists: ${mainFile.absolutePath}")
                     Toast.makeText(this, "Unable to delete map file", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
 
-                mapEntries.removeAll { it.fileName == fileName }
-
                 selectedMap = null
+                selectedMapFolder = null
                 selectedTacticId = null
                 tacticIds.clear()
 
@@ -350,13 +431,15 @@ class MainActivity : AppCompatActivity() {
                 tacticOverlay.visibility = View.GONE
                 tacticSpinner.visibility = View.GONE
                 searchMapHint.visibility = View.VISIBLE
+                searchMapHint.text = "Search for a map"
                 mapActions.visibility = View.GONE
-                edit.visibility = View.GONE
                 delete.visibility = View.GONE
                 share.visibility = View.VISIBLE
                 share.text = "Load"
                 mapLegendScroll.visibility = View.GONE
                 mapLegend.removeAllViews()
+                mapModesScroll.visibility = View.GONE
+                mapModes.removeAllViews()
 
                 refreshMapSearch()
 
@@ -433,12 +516,9 @@ class MainActivity : AppCompatActivity() {
                     Log.e("QR_TEST", "QR code not detected")
                     Toast.makeText(this, "QR code not detected", Toast.LENGTH_LONG).show()
                 } else {
-
-                    val valid = result == expectedLink
-
                     Toast.makeText(
                         this,
-                        if (valid) "QR code is valid!" else "QR link differs!",
+                        if (result == expectedLink) "QR code is valid!" else "QR link differs!",
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -653,9 +733,7 @@ class MainActivity : AppCompatActivity() {
             .replace(Regex("[^a-zA-Z0-9]+"), "_")
             .trim('_')
 
-        if (baseName.isBlank()) {
-            baseName = "Imported_Map"
-        }
+        if (baseName.isBlank()) baseName = "Imported_Map"
 
         val existingNames = getSavedMaps().toSet()
         var result = baseName
@@ -820,6 +898,13 @@ class MainActivity : AppCompatActivity() {
 
         if (sourceFile.exists()) {
             val sourceName = sourceFile.readText().trim()
+
+            try {
+                assets.open(sourceName).use {
+                    return BitmapFactory.decodeStream(it)
+                }
+            } catch (_: Exception) {}
+
             val resId = resources.getIdentifier(sourceName, "drawable", packageName)
 
             if (resId != 0) {
@@ -1163,14 +1248,12 @@ class MainActivity : AppCompatActivity() {
             Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
         )
 
-        val link = Uri.Builder()
+        return Uri.Builder()
             .scheme("warthundermap")
             .authority("load")
             .appendQueryParameter("pkg", encoded)
             .build()
             .toString()
-
-        return link
     }
 
     private fun createTacticPackage(fileName: String): ByteArray? {
@@ -1256,9 +1339,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            val result = output.toByteArray()
-
-            return result
+            return output.toByteArray()
         } catch (e: Exception) {
             Log.e("MainActivity", "Package creation error", e)
             Toast.makeText(this, "Unable to prepare map package", Toast.LENGTH_SHORT).show()
@@ -1399,15 +1480,9 @@ class MainActivity : AppCompatActivity() {
             text = "Copy link"
             setOnClickListener {
                 val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(
-                    ClipData.newPlainText("War Thunder Map", link)
-                )
+                clipboard.setPrimaryClip(ClipData.newPlainText("War Thunder Map", link))
 
-                Toast.makeText(
-                    this@MainActivity,
-                    "Link copied",
-                    Toast.LENGTH_SHORT
-                ).show()
+                Toast.makeText(this@MainActivity, "Link copied", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -1510,16 +1585,43 @@ class MainActivity : AppCompatActivity() {
 
                 sourceFile.exists() -> {
                     val sourceName = sourceFile.readText().trim()
-                    val resId = resources.getIdentifier(sourceName, "drawable", packageName)
 
-                    if (resId != 0) {
-                        image.setImageResource(resId)
+                    val bitmap = try {
+                        assets.open(sourceName).use {
+                            BitmapFactory.decodeStream(it)
+                        }
+                    } catch (_: Exception) {
+                        null
+                    }
+
+                    if (bitmap != null) {
+                        image.setImageBitmap(bitmap)
                         searchMapHint.visibility = View.GONE
                         edit.visibility = View.VISIBLE
                     } else {
-                        image.setImageDrawable(null)
-                        searchMapHint.visibility = View.VISIBLE
-                        edit.visibility = View.GONE
+                        val resId = resources.getIdentifier(sourceName, "drawable", packageName)
+
+                        if (resId != 0) {
+                            image.setImageResource(resId)
+                            searchMapHint.visibility = View.GONE
+                            edit.visibility = View.VISIBLE
+                        } else if (previewFile.exists()) {
+                            val preview = BitmapFactory.decodeFile(previewFile.absolutePath)
+
+                            if (preview != null) {
+                                image.setImageBitmap(preview)
+                                searchMapHint.visibility = View.GONE
+                                edit.visibility = View.VISIBLE
+                            } else {
+                                image.setImageDrawable(null)
+                                searchMapHint.visibility = View.VISIBLE
+                                edit.visibility = View.GONE
+                            }
+                        } else {
+                            image.setImageDrawable(null)
+                            searchMapHint.visibility = View.VISIBLE
+                            edit.visibility = View.GONE
+                        }
                     }
                 }
 
@@ -1547,20 +1649,24 @@ class MainActivity : AppCompatActivity() {
             share.visibility = View.VISIBLE
             share.text = "Share"
         } else {
-            val resId = resources.getIdentifier(
-                entry.fileName,
-                "drawable",
-                packageName
-            )
+            val bitmap = try {
+                assets.open(entry.assetPath).use {
+                    BitmapFactory.decodeStream(it)
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Map asset load failed: ${entry.assetPath}", e)
+                null
+            }
 
-            if (resId != 0) {
-                image.setImageResource(resId)
+            if (bitmap != null) {
+                image.setImageBitmap(bitmap)
                 searchMapHint.visibility = View.GONE
                 edit.visibility = View.VISIBLE
             } else {
                 image.setImageDrawable(null)
                 searchMapHint.visibility = View.VISIBLE
                 edit.visibility = View.GONE
+                Toast.makeText(this, "Map image could not be loaded", Toast.LENGTH_SHORT).show()
             }
 
             share.visibility = View.VISIBLE

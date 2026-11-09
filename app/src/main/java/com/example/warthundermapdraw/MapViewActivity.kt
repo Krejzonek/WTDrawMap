@@ -32,11 +32,14 @@ private data class TacticalPlan(
 class MapViewActivity : AppCompatActivity() {
 
     private lateinit var mapName: String
+    private var mapAssetPath = ""
+
     private lateinit var imageView: ImageView
     private lateinit var back: Button
     private lateinit var drawButton: Button
     private lateinit var eraseButton: Button
     private lateinit var saveButton: Button
+    private lateinit var view3D: Button
     private lateinit var mapFrame: FrameLayout
     private lateinit var mapContent: FrameLayout
     private lateinit var clearAll: Button
@@ -49,7 +52,12 @@ class MapViewActivity : AppCompatActivity() {
     private lateinit var addTacticButton: Button
     private lateinit var renameTacticButton: Button
     private lateinit var deleteTacticButton: Button
+    private lateinit var map3DView: Map3DView
+    private lateinit var tacticControls: LinearLayout
+    private lateinit var legendBar: LinearLayout
+    private lateinit var drawingControls: LinearLayout
 
+    private var is3DMode = false
     private val tactics = mutableListOf<TacticalPlan>()
     private val legendEntries = linkedMapOf<Int, String>()
 
@@ -82,6 +90,7 @@ class MapViewActivity : AppCompatActivity() {
         }
 
         mapName = intent.getStringExtra("MAP_NAME") ?: ""
+        mapAssetPath = intent.getStringExtra("MAP_ASSET_PATH") ?: ""
         isSavedMap = mapName.startsWith("saved_")
 
         imageView = findViewById(R.id.mapImageView)
@@ -89,6 +98,7 @@ class MapViewActivity : AppCompatActivity() {
         drawButton = findViewById(R.id.draw)
         eraseButton = findViewById(R.id.Erser)
         saveButton = findViewById(R.id.Save)
+        view3D = findViewById(R.id.View3D)
         mapFrame = findViewById(R.id.mapFrame)
         mapContent = findViewById(R.id.mapContent)
         clearAll = findViewById(R.id.ClearAll)
@@ -101,8 +111,30 @@ class MapViewActivity : AppCompatActivity() {
         addTacticButton = findViewById(R.id.AddTactic)
         renameTacticButton = findViewById(R.id.RenameTactic)
         deleteTacticButton = findViewById(R.id.DeleteTactic)
+        tacticControls = findViewById(R.id.tacticControls)
+        legendBar = findViewById(R.id.legendBar)
+        drawingControls = findViewById(R.id.drawingControls)
+
+        map3DView = Map3DView(this)
+        map3DView.visibility = View.GONE
+
+        mapFrame.addView(
+            map3DView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
 
         loadImage()
+
+        view3D.setOnClickListener {
+            if (is3DMode) {
+                switchTo2D()
+            } else {
+                switchTo3D()
+            }
+        }
 
         mapContent.pivotX = 0f
         mapContent.pivotY = 0f
@@ -203,7 +235,6 @@ class MapViewActivity : AppCompatActivity() {
                 .setMessage("Are you sure you want to go back to the main screen?")
                 .setPositiveButton("Yes") { dialog, _ ->
                     dialog.dismiss()
-                    startActivity(Intent(this, MainActivity::class.java))
                     finish()
                 }
                 .setNegativeButton("No", null)
@@ -248,6 +279,67 @@ class MapViewActivity : AppCompatActivity() {
         }
 
         updateTacticSpinner()
+    }
+
+    private fun switchTo3D() {
+        if (is3DMode) return
+
+        activeDrawing?.isDrawingEnabled = false
+
+        mapContent.visibility = View.GONE
+        colorButtons.visibility = View.GONE
+
+        tacticControls.visibility = View.GONE
+        legendBar.visibility = View.GONE
+        drawingControls.visibility = View.GONE
+
+        map3DView.visibility = View.VISIBLE
+
+        val sourceMapName = if (isSavedMap) {
+            val sourceFile = File(filesDir, "$mapName.source")
+
+            if (sourceFile.exists()) {
+                sourceFile.readText().trim()
+            } else {
+                mapName
+            }
+        } else {
+            mapName
+        }
+
+        map3DView.post {
+            if (is3DMode) return@post
+            map3DView.onResumeRendering()
+        }
+
+        view3D.text = "2D"
+        is3DMode = true
+    }
+
+    private fun switchTo2D() {
+        if (!is3DMode) return
+
+        map3DView.onPauseRendering()
+        map3DView.visibility = View.GONE
+
+        mapContent.visibility = View.VISIBLE
+
+        tacticControls.visibility = View.VISIBLE
+        legendBar.visibility = View.VISIBLE
+        drawingControls.visibility = View.VISIBLE
+
+        activeDrawing?.isDrawingEnabled = isDrawingMode && !isZoomMode
+
+        colorButtons.visibility = if (isDrawingMode && !isZoomMode) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
+
+        view3D.text = "3D"
+        is3DMode = false
+
+        updateHistoryButtons()
     }
 
     private fun createTactic(id: String, name: String): TacticalPlan {
@@ -785,37 +877,81 @@ class MapViewActivity : AppCompatActivity() {
             when {
                 baseFile.exists() -> {
                     val bitmap = BitmapFactory.decodeFile(baseFile.absolutePath)
-                    if (bitmap != null) imageView.setImageBitmap(bitmap)
+                    if (bitmap != null) {
+                        imageView.setImageBitmap(bitmap)
+                    } else {
+                        Log.e("MapView", "Could not decode base image: ${baseFile.absolutePath}")
+                    }
                 }
 
                 sourceFile.exists() -> {
                     val sourceName = sourceFile.readText().trim()
-                    val resId = resources.getIdentifier(sourceName, "drawable", packageName)
+                    var bitmap: Bitmap? = null
 
-                    if (resId != 0) {
-                        imageView.setImageResource(resId)
-                    } else if (mapFile.exists()) {
-                        val bitmap = BitmapFactory.decodeFile(mapFile.absolutePath)
-                        if (bitmap != null) imageView.setImageBitmap(bitmap)
+                    try {
+                        bitmap = assets.open(sourceName).use {
+                            BitmapFactory.decodeStream(it)
+                        }
+                    } catch (e: Exception) {
+                        Log.w("MapView", "Asset source not found: $sourceName", e)
+                    }
+
+                    if (bitmap != null) {
+                        imageView.setImageBitmap(bitmap)
                     } else {
-                        Log.e("MapView", "Source drawable not found: $sourceName")
+                        val resId = resources.getIdentifier(sourceName, "drawable", packageName)
+
+                        if (resId != 0) {
+                            imageView.setImageResource(resId)
+                        } else if (mapFile.exists()) {
+                            val fallbackBitmap = BitmapFactory.decodeFile(mapFile.absolutePath)
+
+                            if (fallbackBitmap != null) {
+                                imageView.setImageBitmap(fallbackBitmap)
+                            } else {
+                                Log.e("MapView", "Could not decode saved image: ${mapFile.absolutePath}")
+                            }
+                        } else {
+                            Log.e("MapView", "Source image not found: $sourceName")
+                        }
                     }
                 }
 
                 mapFile.exists() -> {
                     val bitmap = BitmapFactory.decodeFile(mapFile.absolutePath)
-                    if (bitmap != null) imageView.setImageBitmap(bitmap)
+
+                    if (bitmap != null) {
+                        imageView.setImageBitmap(bitmap)
+                    } else {
+                        Log.e("MapView", "Could not decode saved image: ${mapFile.absolutePath}")
+                    }
                 }
 
                 else -> Log.e("MapView", "Saved file not found: $mapName")
             }
         } else {
-            val resId = resources.getIdentifier(mapName, "drawable", packageName)
+            if (mapAssetPath.isNotBlank()) {
+                try {
+                    val bitmap = assets.open(mapAssetPath).use {
+                        BitmapFactory.decodeStream(it)
+                    }
 
-            if (resId != 0) {
-                imageView.setImageResource(resId)
+                    if (bitmap != null) {
+                        imageView.setImageBitmap(bitmap)
+                    } else {
+                        Log.e("MapView", "Could not decode map asset: $mapAssetPath")
+                    }
+                } catch (e: Exception) {
+                    Log.e("MapView", "Map asset not found: $mapAssetPath", e)
+                }
             } else {
-                Log.e("MapView", "Drawable not found: $mapName")
+                val resId = resources.getIdentifier(mapName, "drawable", packageName)
+
+                if (resId != 0) {
+                    imageView.setImageResource(resId)
+                } else {
+                    Log.e("MapView", "Map asset path and drawable not found: $mapName")
+                }
             }
         }
     }
@@ -885,7 +1021,7 @@ class MapViewActivity : AppCompatActivity() {
             }
 
             if (!isSavedMap) {
-                File(filesDir, "$savedFileName.source").writeText(mapName)
+                File(filesDir, "$savedFileName.source").writeText(mapAssetPath)
             } else {
                 val sourceFile = File(filesDir, "$mapName.source")
 
@@ -963,5 +1099,29 @@ class MapViewActivity : AppCompatActivity() {
         } finally {
             baseBitmap.recycle()
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+
+        if (is3DMode) {
+            map3DView.onResumeRendering()
+        }
+    }
+
+    override fun onPause() {
+        if (::map3DView.isInitialized) {
+            map3DView.onPauseRendering()
+        }
+
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        if (::map3DView.isInitialized) {
+            map3DView.release()
+        }
+
+        super.onDestroy()
     }
 }
