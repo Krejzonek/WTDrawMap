@@ -1,1687 +1,1308 @@
 package com.example.warthundermapdraw
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
-import android.graphics.drawable.GradientDrawable
-import android.view.ViewGroup
-import android.net.Uri
+import android.graphics.PointF
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.os.Bundle
-import android.util.Base64
 import android.util.Log
-import android.view.Gravity
+import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
-import android.view.inputmethod.InputMethodManager
-import android.widget.*
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.activity.enableEdgeToEdge
-import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.barcode.BarcodeScannerOptions
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
-import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.EncodeHintType
-import com.google.zxing.WriterException
-import com.google.zxing.qrcode.QRCodeWriter
-import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import androidx.core.view.WindowInsetsControllerCompat
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
-import java.io.DataOutputStream
-import java.io.File
-import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
-import java.util.zip.ZipOutputStream
-import androidx.activity.result.contract.ActivityResultContracts
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
+import kotlin.math.atan2
+import kotlin.math.hypot
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var searchMap: AutoCompleteTextView
-    private lateinit var image: ImageView
-    private lateinit var tacticOverlay: ImageView
-    private lateinit var tacticSpinner: Spinner
-    private lateinit var searchMapHint: TextView
-    private lateinit var edit: Button
-    private lateinit var delete: Button
-    private lateinit var mapActions: LinearLayout
-    private lateinit var share: Button
-    private lateinit var tacticalMap: ImageButton
-    private lateinit var sideMenu: LinearLayout
-    private lateinit var menuOverlay: View
-    private lateinit var drawMapOption: TextView
-    private lateinit var tacticMapOption: TextView
-    private lateinit var mapAdapter: ArrayAdapter<MapEntry>
-    private lateinit var mapLegend: LinearLayout
-    private lateinit var mapLegendScroll: HorizontalScrollView
-    private lateinit var mapModes: LinearLayout
-    private lateinit var mapModesScroll: HorizontalScrollView
+    companion object {
+        private const val TAG = "WarThunderScanner"
+        private const val UPDATE_INTERVAL = 500L
+        private const val MIN_ZOOM = 1f
+        private const val MAX_ZOOM = 5f
+        private const val SPAWN_CLUSTER_DISTANCE = 0.035f
 
-    private val mapEntries = mutableListOf<MapEntry>()
-    private val tacticIds = mutableListOf<String>()
-    private var selectedMap: MapEntry? = null
-    private var selectedMapFolder: String? = null
-    private var selectedTacticId: String? = null
-    private var isChangingTacticSpinner = false
-
-    private val vectorMagic = 0x57544D32
-
-    private data class MapEntry(
-        val displayName: String,
-        val fileName: String,
-        val isSaved: Boolean,
-        val assetPath: String = "",
-        val mapFolder: String = "",
-        val modeName: String = ""
-    ) {
-        override fun toString(): String = displayName
+        private val FRIENDLY_COLORS = setOf(
+            "#1952FF",
+            "#AAFF8E"
+        )
     }
 
-    private data class MapMode(
-        val name: String,
-        val assetPath: String,
-        val fileName: String
+    private lateinit var image: ImageView
+    private lateinit var status: TextView
+    private lateinit var searchMapHint: TextView
+    private lateinit var mapOverlay: MapOverlayView
+    private lateinit var mapContainer: FrameLayout
+    private lateinit var apiClient: WarThunderApiClient
+    private lateinit var scaleDetector: ScaleGestureDetector
+
+    private val scheduler = Executors.newSingleThreadScheduledExecutor()
+    private var updateTask: ScheduledFuture<*>? = null
+
+    @Volatile
+    private var isDiscovering = false
+
+    @Volatile
+    private var isLoading = false
+
+    private var hasLoadedImage = false
+    private var lastGeneration = -1
+    private var lastHudType = -1
+
+    private var currentBitmap: Bitmap? = null
+
+    private var zoom = 1f
+    private var translateX = 0f
+    private var translateY = 0f
+
+    private var lastTouchX = 0f
+    private var lastTouchY = 0f
+    private var isDragging = false
+
+    private var currentMapData = MapData(
+        markers = emptyList(),
+        sectors = emptyList(),
+        isAirView = false
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).let {
+            it.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+
         setContentView(R.layout.activity_main)
 
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
+        findViewById<View>(android.R.id.content).setOnApplyWindowInsetsListener { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
+            view.setPadding(
+                systemBars.left,
+                systemBars.top,
+                systemBars.right,
+                systemBars.bottom
+            )
             insets
         }
 
-        searchMap = findViewById(R.id.SearchMap)
         image = findViewById(R.id.Map)
-        tacticOverlay = findViewById(R.id.MapTacticOverlay)
-        tacticSpinner = findViewById(R.id.MapTacticSpinner)
+        status = findViewById(R.id.ConnectionStatus)
         searchMapHint = findViewById(R.id.SearchMapHint)
-        edit = findViewById(R.id.Edit)
-        delete = findViewById(R.id.Delete)
-        mapActions = findViewById(R.id.MapActions)
-        share = findViewById(R.id.Share)
-        tacticalMap = findViewById(R.id.TacticalMap)
-        sideMenu = findViewById(R.id.SideMenu)
-        menuOverlay = findViewById(R.id.MenuOverlay)
-        drawMapOption = findViewById(R.id.DrawMapOption)
-        tacticMapOption = findViewById(R.id.TacticMapOption)
-        mapLegend = findViewById(R.id.MapLegend)
-        mapLegendScroll = findViewById(R.id.MapLegendScroll)
-        mapModes = findViewById(R.id.MapModes)
-        mapModesScroll = findViewById(R.id.MapModesScroll)
 
-        sideMenu.translationX = -280 * resources.displayMetrics.density
+        mapContainer = image.parent as? FrameLayout
+            ?: throw IllegalStateException("Map ImageView must be inside a FrameLayout")
 
-        tacticalMap.setOnClickListener { openMenu() }
-        menuOverlay.setOnClickListener { closeMenu() }
-        drawMapOption.setOnClickListener { closeMenu() }
+        image.scaleType = ImageView.ScaleType.FIT_CENTER
+        image.adjustViewBounds = false
+        image.pivotX = 0f
+        image.pivotY = 0f
 
-        tacticMapOption.setOnClickListener {
-            closeMenu()
-            startActivity(
-                Intent(this, TacticalMapActivity::class.java)
-                    .putExtra("MAP_NAME", selectedMap?.fileName ?: "")
+        mapOverlay = MapOverlayView()
+        mapOverlay.pivotX = 0f
+        mapOverlay.pivotY = 0f
+
+        mapContainer.addView(
+            mapOverlay,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
             )
-        }
+        )
 
-        mapAdapter = ArrayAdapter(this, R.layout.spinner_item, mapEntries)
-        mapAdapter.setDropDownViewResource(R.layout.spinner_item)
-        searchMap.setAdapter(mapAdapter)
-        searchMap.threshold = 1
+        mapOverlay.isClickable = false
+        mapOverlay.isFocusable = false
 
-        loadMapEntries()
+        apiClient = WarThunderApiClient(applicationContext)
 
-        selectedMap = null
-        selectedMapFolder = null
-        searchMap.setText("", false)
-        image.setImageDrawable(null)
-        tacticOverlay.setImageDrawable(null)
-        tacticOverlay.visibility = View.GONE
-        tacticSpinner.visibility = View.GONE
-        searchMapHint.visibility = View.VISIBLE
-        mapActions.visibility = View.GONE
-        delete.visibility = View.GONE
-        share.visibility = View.VISIBLE
-        share.text = "Load"
-        mapLegendScroll.visibility = View.GONE
-        mapLegend.removeAllViews()
-        mapModesScroll.visibility = View.GONE
-        mapModes.removeAllViews()
+        scaleDetector = ScaleGestureDetector(
+            this,
+            object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                override fun onScale(detector: ScaleGestureDetector): Boolean {
+                    val oldZoom = zoom
+                    zoom = (zoom * detector.scaleFactor).coerceIn(MIN_ZOOM, MAX_ZOOM)
 
-        searchMap.setOnClickListener {
-            searchMap.showDropDown()
-        }
+                    val factor = zoom / oldZoom
 
-        searchMap.setOnItemClickListener { parent, _, position, _ ->
-            val entry = parent.getItemAtPosition(position) as MapEntry
+                    translateX = detector.focusX - (detector.focusX - translateX) * factor
+                    translateY = detector.focusY - (detector.focusY - translateY) * factor
 
-            if (entry.isSaved) {
-                selectedMapFolder = null
-                mapModesScroll.visibility = View.GONE
-                selectMap(entry)
-            } else {
-                showMapModes(entry)
+                    applyMapTransform()
+                    return true
+                }
             }
+        )
 
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.hideSoftInputFromWindow(searchMap.windowToken, 0)
-            searchMap.clearFocus()
+        mapContainer.setOnTouchListener { _, event ->
+            handleTouch(event)
         }
 
-        searchMap.setOnFocusChangeListener { _, hasFocus ->
-            if (hasFocus) searchMap.showDropDown()
-        }
+        updateStatus("Searching for War Thunder...")
+        updateMapHint("Waiting for War Thunder...")
 
-        tacticSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (isChangingTacticSpinner || position !in tacticIds.indices) return
-                selectedTacticId = tacticIds[position]
-                loadSelectedTacticOverlay()
-            }
-        }
-
-        edit.setOnClickListener {
-            val entry = selectedMap ?: return@setOnClickListener
-
-            val intent = Intent(this, MapViewActivity::class.java)
-            intent.putExtra("MAP_NAME", entry.fileName)
-            intent.putExtra("MAP_ASSET_PATH", entry.assetPath)
-            intent.putExtra("ACTIVE_TACTIC_ID", selectedTacticId)
-            startActivity(intent)
-        }
-
-        delete.setOnClickListener {
-            deleteSelectedMap()
-        }
-
-        share.setOnClickListener {
-            val entry = selectedMap
-
-            if (entry == null) {
-                loadSharedMap()
-                return@setOnClickListener
-            }
-
-            if (entry.isSaved) {
-                shareCurrentMap()
-            } else {
-                loadSharedMap()
-            }
-        }
-
-        handleCustomLink(intent)
+        startSearching()
     }
 
-    private fun loadMapEntries() {
-        mapEntries.clear()
+    private fun startSearching() {
+        updateTask?.cancel(false)
 
-        val folders = assets.list("maps2d") ?: emptyArray()
-
-        for (folder in folders.sorted()) {
-            val modes = assets.list("maps2d/$folder") ?: emptyArray()
-
-            if (modes.isEmpty()) continue
-
-            mapEntries.add(
-                MapEntry(
-                    displayName = folder.replace("_", " "),
-                    fileName = folder,
-                    isSaved = false,
-                    mapFolder = folder
-                )
-            )
-        }
-
-        for (name in getSavedMaps()) {
-            mapEntries.add(
-                MapEntry(
-                    displayName = "Saved: ${name.replace("_", " ")}",
-                    fileName = "saved_$name",
-                    isSaved = true
-                )
-            )
-        }
-
-        mapAdapter.notifyDataSetChanged()
+        updateTask = scheduler.scheduleWithFixedDelay(
+            {
+                try {
+                    if (apiClient.getServerAddress() == null) {
+                        discoverServer()
+                    } else {
+                        loadMap()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Update loop error", e)
+                }
+            },
+            0,
+            UPDATE_INTERVAL,
+            TimeUnit.MILLISECONDS
+        )
     }
 
-    private fun refreshMapSearch() {
-        loadMapEntries()
-        searchMap.setText("", false)
-        searchMap.dismissDropDown()
+    private fun discoverServer() {
+        if (isDiscovering) return
+        isDiscovering = true
+
+        apiClient.discover { address ->
+            runOnUiThread {
+                isDiscovering = false
+
+                if (address != null) {
+                    Log.i(TAG, "Server found: $address")
+                    updateStatus("Connected: $address")
+                } else {
+                    updateStatus("Searching for War Thunder...")
+                }
+            }
+        }
     }
 
-    private fun getModesForMap(folder: String): List<MapMode> {
-        val result = mutableListOf<MapMode>()
-        val modeFolders = assets.list("maps2d/$folder") ?: return result
+    private fun loadMap() {
+        if (isLoading) return
+        isLoading = true
 
-        for (mode in modeFolders.sorted()) {
-            val modePath = "maps2d/$folder/$mode"
-            val files = assets.list(modePath) ?: continue
+        apiClient.loadMap { data ->
+            runOnUiThread {
+                isLoading = false
 
-            val imageFile = files.firstOrNull {
-                it.endsWith(".png", true)
-            } ?: continue
+                if (data == null) {
+                    if (apiClient.getServerAddress() == null) {
+                        updateStatus("Connection lost. Searching again...")
+                        updateMapHint("Searching for War Thunder...")
+                    }
+                    return@runOnUiThread
+                }
 
-            val assetPath = "$modePath/$imageFile"
-            val safeId = "${folder}_${mode}_${imageFile.substringBeforeLast(".")}"
-                .replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                if (!data.info.optBoolean("valid", false)) {
+                    currentMapData = MapData(
+                        markers = emptyList(),
+                        sectors = emptyList(),
+                        isAirView = false
+                    )
 
-            result.add(
-                MapMode(
-                    name = mode.replace("_", " "),
-                    assetPath = assetPath,
-                    fileName = safeId
-                )
-            )
+                    mapOverlay.setMapData(currentMapData)
+                    updateMapHint("Waiting for a battle...")
+                    updateStatus("Connected: ${data.address}")
+                    return@runOnUiThread
+                }
+
+                val generation = data.info.optInt("map_generation", -1)
+                val hudType = data.info.optInt("hud_type", -1)
+
+                if (data.image != null) {
+                    val shouldUpdateImage =
+                        !hasLoadedImage ||
+                                generation != lastGeneration ||
+                                hudType != lastHudType
+
+                    if (shouldUpdateImage) {
+                        val bitmap = BitmapFactory.decodeByteArray(
+                            data.image,
+                            0,
+                            data.image.size
+                        )
+
+                        if (bitmap != null) {
+                            currentBitmap = bitmap
+                            image.setImageBitmap(bitmap)
+
+                            hasLoadedImage = true
+                            lastGeneration = generation
+                            lastHudType = hudType
+
+                            resetMapTransform()
+
+                            image.post {
+                                applyMapTransform()
+                                mapOverlay.invalidate()
+                            }
+
+                            Log.i(
+                                TAG,
+                                "Map image loaded: ${bitmap.width}x${bitmap.height}"
+                            )
+                        }
+                    }
+                }
+
+                if (currentBitmap != null) {
+                    updateMapHint("")
+                } else {
+                    updateMapHint("Loading map...")
+                }
+
+                currentMapData = parseMapObjects(data.objects)
+                mapOverlay.setMapData(currentMapData)
+
+                updateStatus("Connected: ${data.address}")
+            }
+        }
+    }
+
+    private fun resetMapTransform() {
+        zoom = 1f
+        translateX = 0f
+        translateY = 0f
+        applyMapTransform()
+    }
+
+    private fun handleTouch(event: MotionEvent): Boolean {
+        scaleDetector.onTouchEvent(event)
+
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                lastTouchX = event.x
+                lastTouchY = event.y
+                isDragging = true
+                return true
+            }
+
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                isDragging = false
+                return true
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                if (
+                    event.pointerCount == 1 &&
+                    isDragging &&
+                    !scaleDetector.isInProgress &&
+                    zoom > MIN_ZOOM
+                ) {
+                    val dx = event.x - lastTouchX
+                    val dy = event.y - lastTouchY
+
+                    translateX += dx
+                    translateY += dy
+
+                    applyMapTransform()
+                }
+
+                lastTouchX = event.x
+                lastTouchY = event.y
+
+                return true
+            }
+
+            MotionEvent.ACTION_POINTER_UP -> {
+                isDragging = false
+                return true
+            }
+
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_CANCEL -> {
+                isDragging = false
+                return true
+            }
+        }
+
+        return true
+    }
+
+    private fun applyMapTransform() {
+        image.pivotX = 0f
+        image.pivotY = 0f
+        image.scaleX = zoom
+        image.scaleY = zoom
+        image.translationX = translateX
+        image.translationY = translateY
+
+        mapOverlay.pivotX = 0f
+        mapOverlay.pivotY = 0f
+        mapOverlay.scaleX = zoom
+        mapOverlay.scaleY = zoom
+        mapOverlay.translationX = translateX
+        mapOverlay.translationY = translateY
+
+        mapOverlay.invalidate()
+    }
+
+    private fun updateStatus(message: String) {
+        if (!::status.isInitialized) return
+        status.text = message
+    }
+
+    private fun updateMapHint(message: String) {
+        if (!::searchMapHint.isInitialized) return
+
+        searchMapHint.text = message
+        searchMapHint.visibility =
+            if (message.isBlank()) View.GONE else View.VISIBLE
+    }
+
+    private fun getMapObjectList(objects: JSONObject): List<JSONObject> {
+        val result = mutableListOf<JSONObject>()
+
+        val array = objects.optJSONArray("items")
+            ?: objects.optJSONArray("objects")
+
+        if (array != null) {
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                result.add(obj)
+            }
+        } else {
+            val keys = objects.keys()
+
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val obj = objects.optJSONObject(key) ?: continue
+                result.add(obj)
+            }
         }
 
         return result
     }
 
-    private fun showMapModes(entry: MapEntry) {
-        selectedMap = null
-        selectedMapFolder = entry.mapFolder
+    private fun isAirView(objects: List<JSONObject>): Boolean {
+        return objects.any { obj ->
+            val type = obj.optString("type", "").lowercase()
+            val icon = obj.optString("icon", "").lowercase()
 
-        searchMap.setText(entry.displayName, false)
+            type == "aircraft" &&
+                    (icon == "player" || obj.optBoolean("is_player", false))
+        }
+    }
 
-        mapModes.removeAllViews()
-        mapModesScroll.visibility = View.VISIBLE
+    private fun parseMapObjects(objects: JSONObject): MapData {
+        val markers = mutableListOf<MapMarker>()
+        val spawnPoints = mutableListOf<SpawnPoint>()
 
-        image.setImageDrawable(null)
-        tacticOverlay.setImageDrawable(null)
-        tacticOverlay.visibility = View.GONE
-        tacticSpinner.visibility = View.GONE
-        mapActions.visibility = View.GONE
-        mapLegendScroll.visibility = View.GONE
-        mapLegend.removeAllViews()
-        searchMapHint.visibility = View.VISIBLE
-        searchMapHint.text = "Select a game mode"
+        val objectList = getMapObjectList(objects)
+        val airView = isAirView(objectList)
 
-        val modes = getModesForMap(entry.mapFolder)
+        for (obj in objectList) {
+            parseMapObject(obj, markers, spawnPoints, airView)
+        }
 
-        if (modes.isEmpty()) {
-            mapModesScroll.visibility = View.GONE
-            Toast.makeText(this, "No maps found for this location", Toast.LENGTH_SHORT).show()
+        val captureIndices = markers.indices
+            .filter { markers[it].type == MarkerType.CAPTURE }
+            .sortedWith(
+                compareBy<Int> { markers[it].x }
+                    .thenBy { markers[it].y }
+            )
+
+        captureIndices.forEachIndexed { index, markerIndex ->
+            val marker = markers[markerIndex]
+
+            if (marker.label.isBlank()) {
+                markers[markerIndex] = marker.copy(
+                    label = ('A'.code + index).toChar().toString()
+                )
+            }
+        }
+
+        Log.d(
+            TAG,
+            "Parsed map objects: markers=${markers.size}, spawnPoints=${spawnPoints.size}, airView=$airView"
+        )
+
+        return MapData(
+            markers = markers,
+            sectors = clusterSpawnPoints(spawnPoints),
+            isAirView = airView
+        )
+    }
+
+    private fun parseMapObject(
+        obj: JSONObject,
+        markers: MutableList<MapMarker>,
+        spawnPoints: MutableList<SpawnPoint>,
+        airView: Boolean
+    ) {
+        val x = getFloat(obj, "x") ?: return
+        val y = getFloat(obj, "y") ?: return
+
+        if (x !in 0f..1f || y !in 0f..1f) return
+
+        val type = obj.optString("type", "").lowercase()
+        val icon = obj.optString("icon", "").lowercase()
+        val color = getMapObjectColor(obj)
+
+        val isSpawn =
+            type.contains("respawn") ||
+                    type.startsWith("respawn_base") ||
+                    icon.contains("respawn") ||
+                    obj.has("respawn_base_tank") ||
+                    obj.has("respawn_base_fighter") ||
+                    obj.has("respawn_base_bomber")
+
+        if (isSpawn) {
+            spawnPoints.add(
+                SpawnPoint(
+                    x = x,
+                    y = y,
+                    color = color,
+                    type = getSpawnType(type, icon, obj)
+                )
+            )
             return
         }
 
-        val density = resources.displayMetrics.density
+        val isCapture =
+            type.contains("capture") ||
+                    type.contains("zone") ||
+                    icon.contains("capture") ||
+                    icon.contains("zone") ||
+                    obj.has("capture_zone")
 
-        for (mode in modes) {
-            val button = Button(this).apply {
-                text = mode.name
-                textSize = 12f
-                isAllCaps = false
-                setTextColor(Color.WHITE)
-                backgroundTintList = android.content.res.ColorStateList.valueOf(
-                    getColor(R.color.dark_button)
-                )
-                setOnClickListener {
-                    val selected = MapEntry(
-                        displayName = "${entry.displayName} - ${mode.name}",
-                        fileName = mode.fileName,
-                        isSaved = false,
-                        assetPath = mode.assetPath,
-                        mapFolder = entry.mapFolder,
-                        modeName = mode.name
-                    )
-
-                    selectMap(selected)
-                }
-            }
-
-            mapModes.addView(
-                button,
-                LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    (44 * density).toInt()
-                ).apply {
-                    marginEnd = (6 * density).toInt()
-                }
-            )
-        }
-    }
-
-    private fun selectMap(entry: MapEntry) {
-        selectedMap = entry
-        selectedTacticId = null
-        searchMap.setText(entry.displayName, false)
-
-        searchMapHint.visibility = View.GONE
-        searchMapHint.text = "Search for a map"
-
-        share.text = if (entry.isSaved) "Share" else "Load"
-        mapActions.visibility = View.VISIBLE
-        delete.visibility = if (entry.isSaved) View.VISIBLE else View.GONE
-        share.visibility = View.VISIBLE
-
-        tacticOverlay.setImageDrawable(null)
-        tacticOverlay.visibility = View.GONE
-        tacticSpinner.visibility = View.GONE
-        tacticIds.clear()
-
-        loadImageForSelectedMap(entry)
-        loadMapLegend(entry)
-
-        if (entry.isSaved) {
-            loadTacticOptions(entry)
-        } else {
-            tacticSpinner.visibility = View.GONE
-        }
-    }
-
-    private fun deleteSelectedMap() {
-        val entry = selectedMap ?: return
-        if (!entry.isSaved) return
-
-        android.app.AlertDialog.Builder(this)
-            .setTitle("Delete map?")
-            .setMessage("Are you sure you want to permanently delete \"${entry.displayName}\" and all its tactics?")
-            .setPositiveButton("Delete") { _, _ ->
-                val fileName = entry.fileName
-                val mainFile = File(filesDir, "$fileName.png")
-
-                val mapFiles = filesDir.listFiles()?.filter {
-                    it.name == mainFile.name || it.name.startsWith("$fileName.")
-                } ?: emptyList()
-
-                val failedFiles = mutableListOf<String>()
-
-                for (file in mapFiles) {
-                    if (file.exists() && !file.delete()) {
-                        failedFiles.add(file.name)
-                        Log.e("DELETE_MAP", "Unable to delete: ${file.absolutePath}")
-                    }
-                }
-
-                if (mainFile.exists()) {
-                    Toast.makeText(this, "Unable to delete map file", Toast.LENGTH_LONG).show()
-                    return@setPositiveButton
-                }
-
-                selectedMap = null
-                selectedMapFolder = null
-                selectedTacticId = null
-                tacticIds.clear()
-
-                searchMap.dismissDropDown()
-                searchMap.setText("", false)
-                image.setImageDrawable(null)
-                tacticOverlay.setImageDrawable(null)
-                tacticOverlay.visibility = View.GONE
-                tacticSpinner.visibility = View.GONE
-                searchMapHint.visibility = View.VISIBLE
-                searchMapHint.text = "Search for a map"
-                mapActions.visibility = View.GONE
-                delete.visibility = View.GONE
-                share.visibility = View.VISIBLE
-                share.text = "Load"
-                mapLegendScroll.visibility = View.GONE
-                mapLegend.removeAllViews()
-                mapModesScroll.visibility = View.GONE
-                mapModes.removeAllViews()
-
-                refreshMapSearch()
-
-                Toast.makeText(
-                    this,
-                    if (failedFiles.isEmpty()) "Map deleted successfully"
-                    else "Map deleted, but some additional files could not be removed",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun loadTacticOptions(entry: MapEntry) {
-        val file = File(filesDir, "${entry.fileName}.tactics.json")
-        if (!file.exists()) return
-
-        try {
-            val json = JSONObject(file.readText())
-            val array = json.getJSONArray("tactics")
-
-            tacticIds.clear()
-            val names = mutableListOf<String>()
-
-            for (i in 0 until array.length()) {
-                val item = array.getJSONObject(i)
-                val id = item.getString("id")
-                val name = item.getString("name")
-
-                if (!id.matches(Regex("[a-zA-Z0-9_-]+"))) continue
-
-                tacticIds.add(id)
-                names.add(name)
-            }
-
-            if (tacticIds.isEmpty()) return
-
-            val activeIndex = json.optInt("active", 0).coerceIn(0, tacticIds.lastIndex)
-            selectedTacticId = tacticIds[activeIndex]
-
-            val adapter = ArrayAdapter(this, R.layout.spinner_item, names)
-            adapter.setDropDownViewResource(R.layout.spinner_item)
-
-            isChangingTacticSpinner = true
-            tacticSpinner.adapter = adapter
-            tacticSpinner.setSelection(activeIndex, false)
-            tacticSpinner.visibility = View.VISIBLE
-            isChangingTacticSpinner = false
-
-            loadSelectedTacticOverlay()
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Tactic loading error", e)
-            tacticIds.clear()
-            tacticSpinner.visibility = View.GONE
-            isChangingTacticSpinner = false
-        }
-    }
-
-    private fun testQrCode(bitmap: Bitmap, expectedLink: String) {
-        val options = BarcodeScannerOptions.Builder()
-            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-            .build()
-
-        val scanner = BarcodeScanning.getClient(options)
-        val testBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false)
-        val image = InputImage.fromBitmap(testBitmap, 0)
-
-        scanner.process(image)
-            .addOnSuccessListener { barcodes ->
-                val result = barcodes.firstOrNull()?.rawValue
-
-                if (result == null) {
-                    Log.e("QR_TEST", "QR code not detected")
-                    Toast.makeText(this, "QR code not detected", Toast.LENGTH_LONG).show()
-                } else {
-                    Toast.makeText(
-                        this,
-                        if (result == expectedLink) "QR code is valid!" else "QR link differs!",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-            .addOnFailureListener {
-                Log.e("QR_TEST", "Scanning failed", it)
-            }
-            .addOnCompleteListener {
-                scanner.close()
-                testBitmap.recycle()
-            }
-    }
-
-    private fun loadSelectedTacticOverlay() {
-        val entry = selectedMap ?: return
-        val tacticId = selectedTacticId ?: return
-
-        val bitmapFile = File(filesDir, "${entry.fileName}.$tacticId.png")
-        val vectorFile = File(filesDir, "${entry.fileName}.$tacticId.json")
-
-        val bitmap = when {
-            bitmapFile.exists() -> BitmapFactory.decodeFile(bitmapFile.absolutePath)
-            vectorFile.exists() -> {
-                val base = getMapBaseBitmap(entry.fileName)
-                if (base != null) {
-                    val result = createVectorOverlay(vectorFile, base.width, base.height)
-                    base.recycle()
-                    result
-                } else null
-            }
-            else -> null
-        }
-
-        if (bitmap != null) {
-            tacticOverlay.setImageBitmap(bitmap)
-            tacticOverlay.visibility = View.VISIBLE
-        } else {
-            tacticOverlay.setImageDrawable(null)
-            tacticOverlay.visibility = View.GONE
-        }
-    }
-
-    private fun loadMapLegend(entry: MapEntry) {
-        mapLegend.removeAllViews()
-        mapLegendScroll.visibility = View.GONE
-
-        if (!entry.isSaved) return
-
-        val file = File(filesDir, "${entry.fileName}.legend")
-        if (!file.exists()) return
-
-        val density = resources.displayMetrics.density
-
-        file.readLines().forEach { line ->
-            val parts = line.split("|", limit = 2)
-            if (parts.size != 2) return@forEach
-
-            val color = parts[0].toIntOrNull() ?: return@forEach
-            val label = parts[1]
-
-            val item = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(
-                    (8 * density).toInt(),
-                    (5 * density).toInt(),
-                    (12 * density).toInt(),
-                    (5 * density).toInt()
-                )
-            }
-
-            val colorView = View(this).apply {
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(color)
-                }
-            }
-
-            item.addView(
-                colorView,
-                LinearLayout.LayoutParams(
-                    (12 * density).toInt(),
-                    (12 * density).toInt()
-                )
+        if (isCapture) {
+            val captureColor = parseColorOrDefault(
+                color,
+                Color.rgb(180, 180, 180)
             )
 
-            val textView = TextView(this).apply {
-                text = label
-                textSize = 12f
-                setTextColor(Color.WHITE)
-                setPadding((6 * density).toInt(), 0, 0, 0)
-            }
+            val label = getCaptureLabel(obj)
 
-            item.addView(textView)
-            mapLegend.addView(item)
-        }
-
-        if (mapLegend.childCount > 0) {
-            mapLegendScroll.visibility = View.VISIBLE
-        }
-    }
-
-    private fun openMenu() {
-        sideMenu.visibility = View.VISIBLE
-        menuOverlay.visibility = View.VISIBLE
-        menuOverlay.alpha = 0f
-
-        menuOverlay.animate().alpha(1f).setDuration(200).start()
-        sideMenu.animate().translationX(0f).setDuration(200).start()
-    }
-
-    private fun closeMenu() {
-        menuOverlay.animate().alpha(0f).setDuration(200).withEndAction {
-            menuOverlay.visibility = View.GONE
-        }.start()
-
-        sideMenu.animate()
-            .translationX(-280 * resources.displayMetrics.density)
-            .setDuration(200)
-            .withEndAction {
-                sideMenu.visibility = View.GONE
-            }.start()
-    }
-
-    private fun handleCustomLink(intent: Intent?) {
-        val data = intent?.data ?: return
-
-        if (data.scheme != "warthundermap" || data.host != "load") {
-            Toast.makeText(this, "Invalid map link", Toast.LENGTH_SHORT).show()
+            markers.add(
+                MapMarker(
+                    x,
+                    y,
+                    label,
+                    captureColor,
+                    MarkerType.CAPTURE
+                )
+            )
             return
         }
 
-        try {
-            val packageData = data.getQueryParameter("pkg")
+        val isPlayer =
+            icon == "player" ||
+                    type == "player" ||
+                    obj.optBoolean("is_player", false)
 
-            showImportNameDialog { savedFileName ->
-                try {
-                    if (!packageData.isNullOrBlank()) {
-                        importTacticPackage(packageData, savedFileName)
+        if (isPlayer) {
+            val isAircraft = type == "aircraft"
+
+            markers.add(
+                MapMarker(
+                    x = x,
+                    y = y,
+                    label = "",
+                    color = Color.WHITE,
+                    type = if (isAircraft) {
+                        MarkerType.PLAYER_AIRCRAFT
                     } else {
-                        importLegacyMap(data, savedFileName)
-                    }
-                } catch (e: Exception) {
-                    Log.e("MainActivity", "Import error", e)
-                    Toast.makeText(this, "Invalid link or map data", Toast.LENGTH_LONG).show()
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Import error", e)
-            Toast.makeText(this, "Invalid link or map data", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun showImportNameDialog(onConfirm: (String) -> Unit) {
-        val density = resources.displayMetrics.density
-
-        val input = EditText(this).apply {
-            setSingleLine(true)
-            hint = "Enter map name"
-            setText("Imported Map")
-            setSelection(text.length)
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or
-                    android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-        }
-
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(
-                (20 * density).toInt(),
-                (8 * density).toInt(),
-                (20 * density).toInt(),
-                (4 * density).toInt()
-            )
-            addView(
-                input,
-                LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
+                        MarkerType.PLAYER
+                    },
+                    directionX = getFloat(obj, "dx") ?: 0f,
+                    directionY = getFloat(obj, "dy") ?: -1f
                 )
             )
+            return
         }
 
-        val dialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Name imported map")
-            .setMessage("Choose a name for this map and its tactics.")
-            .setView(container)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Import", null)
-            .create()
+        val isAircraft = type == "aircraft"
+        val isGroundVehicle =
+            type == "ground_model" ||
+                    type == "ship" ||
+                    type == "vehicle"
 
-        dialog.setOnShowListener {
-            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val name = input.text.toString().trim()
-
-                if (name.isBlank()) {
-                    input.error = "Enter a map name"
-                    return@setOnClickListener
-                }
-
-                val savedFileName = createUniqueMapFileName(name)
-                dialog.dismiss()
-                onConfirm(savedFileName)
+        if (airView) {
+            if (isAircraft && isFriendlyColor(color)) {
+                markers.add(
+                    MapMarker(
+                        x = x,
+                        y = y,
+                        label = "",
+                        color = Color.rgb(25, 82, 255),
+                        type = MarkerType.AIRCRAFT_TEAMMATE,
+                        directionX = getFloat(obj, "dx") ?: 0f,
+                        directionY = getFloat(obj, "dy") ?: -1f
+                    )
+                )
+            }
+        } else {
+            if (isGroundVehicle && isFriendlyColor(color)) {
+                markers.add(
+                    MapMarker(
+                        x = x,
+                        y = y,
+                        label = "",
+                        color = Color.rgb(25, 82, 255),
+                        type = MarkerType.TEAMMATE
+                    )
+                )
             }
         }
-
-        dialog.show()
     }
 
-    private fun createUniqueMapFileName(name: String): String {
-        var baseName = name
-            .trim()
-            .replace(Regex("[^a-zA-Z0-9]+"), "_")
-            .trim('_')
-
-        if (baseName.isBlank()) baseName = "Imported_Map"
-
-        val existingNames = getSavedMaps().toSet()
-        var result = baseName
-        var counter = 2
-
-        while (result in existingNames || File(filesDir, "saved_$result.png").exists()) {
-            result = "${baseName}_$counter"
-            counter++
-        }
-
-        return "saved_$result"
-    }
-
-    private fun importLegacyMap(data: Uri, savedFileName: String) {
-        val encoded = data.getQueryParameter("img") ?: return
-
-        val bytes = Base64.decode(
-            encoded,
-            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+    private fun getCaptureLabel(obj: JSONObject): String {
+        val possibleLabels = listOf(
+            obj.optString("name", ""),
+            obj.optString("label", ""),
+            obj.optString("id", ""),
+            obj.optString("icon", "")
         )
 
-        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            ?: throw IllegalArgumentException("Invalid image data")
+        for (value in possibleLabels) {
+            val label = value.trim().uppercase()
 
-        File(filesDir, "$savedFileName.png").outputStream().use {
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+            if (label.matches(Regex("[A-Z]"))) {
+                return label
+            }
         }
 
-        bitmap.recycle()
-
-        val encodedLegend = data.getQueryParameter("legend")
-
-        if (!encodedLegend.isNullOrBlank()) {
-            val legendBytes = Base64.decode(
-                encodedLegend,
-                Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
-            )
-
-            File(filesDir, "$savedFileName.legend").writeText(
-                String(legendBytes, Charsets.UTF_8)
-            )
-        }
-
-        loadMapEntries()
-
-        mapEntries.firstOrNull { it.fileName == savedFileName }?.let {
-            selectMap(it)
-        }
-
-        Toast.makeText(this, "Map imported successfully", Toast.LENGTH_LONG).show()
+        return ""
     }
 
-    private fun importTacticPackage(encoded: String, savedFileName: String) {
-        val bytes = Base64.decode(
-            encoded,
-            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
-        )
+    private fun getSpawnType(
+        type: String,
+        icon: String,
+        obj: JSONObject
+    ): String {
+        val combined = "$type $icon ${obj.toString()}".lowercase()
 
-        ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
-            var entry = zip.nextEntry
-
-            while (entry != null) {
-                val name = entry.name
-
-                val validEntry = name == "base.png" ||
-                        name == "source.txt" ||
-                        name == "legend.txt" ||
-                        name == "tactics.json" ||
-                        name.matches(Regex("tactics/[a-zA-Z0-9_-]+\\.(png|json|bin)"))
-
-                if (validEntry && !entry.isDirectory) {
-                    val outputName = when {
-                        name == "base.png" -> "$savedFileName.base.png"
-                        name == "source.txt" -> "$savedFileName.source"
-                        name == "legend.txt" -> "$savedFileName.legend"
-                        name == "tactics.json" -> "$savedFileName.tactics.json"
-                        name.startsWith("tactics/") -> {
-                            val tacticFile = name.removePrefix("tactics/")
-                            "$savedFileName.${tacticFile.substringBeforeLast(".")}.${tacticFile.substringAfterLast(".")}"
-                        }
-                        else -> null
-                    }
-
-                    if (outputName != null) {
-                        File(filesDir, outputName).outputStream().use { output ->
-                            zip.copyTo(output)
-                        }
-                    }
-                }
-
-                zip.closeEntry()
-                entry = zip.nextEntry
-            }
+        return when {
+            combined.contains("fighter") -> "FIGHTER"
+            combined.contains("bomber") -> "BOMBER"
+            combined.contains("tank") -> "TANK"
+            else -> "SPAWN"
         }
-
-        val metadataFile = File(filesDir, "$savedFileName.tactics.json")
-        if (!metadataFile.exists()) {
-            throw IllegalArgumentException("Missing tactics metadata")
-        }
-
-        val metadata = JSONObject(metadataFile.readText())
-        val tactics = metadata.getJSONArray("tactics")
-
-        for (i in 0 until tactics.length()) {
-            val id = tactics.getJSONObject(i).getString("id")
-            if (!id.matches(Regex("[a-zA-Z0-9_-]+"))) continue
-
-            val binaryFile = File(filesDir, "$savedFileName.$id.bin")
-            val vectorFile = File(filesDir, "$savedFileName.$id.json")
-
-            if (binaryFile.exists()) {
-                val vectorData = decodeVectorActions(binaryFile.readBytes())
-                vectorFile.writeText(vectorData.toString())
-                binaryFile.delete()
-            }
-        }
-
-        val base = getMapBaseBitmap(savedFileName)
-            ?: throw IllegalArgumentException("Missing or invalid base map")
-
-        try {
-            for (i in 0 until tactics.length()) {
-                val id = tactics.getJSONObject(i).getString("id")
-                if (!id.matches(Regex("[a-zA-Z0-9_-]+"))) continue
-
-                val vectorFile = File(filesDir, "$savedFileName.$id.json")
-                val bitmapFile = File(filesDir, "$savedFileName.$id.png")
-
-                if (vectorFile.exists() && !bitmapFile.exists()) {
-                    val overlay = createVectorOverlay(vectorFile, base.width, base.height)
-
-                    if (overlay != null) {
-                        File(filesDir, "$savedFileName.$id.png").outputStream().use {
-                            overlay.compress(Bitmap.CompressFormat.PNG, 100, it)
-                        }
-                        overlay.recycle()
-                    }
-                }
-            }
-        } finally {
-            base.recycle()
-        }
-
-        createFlattenedPreview(savedFileName)
-        loadMapEntries()
-
-        mapEntries.firstOrNull { it.fileName == savedFileName }?.let {
-            selectMap(it)
-        }
-
-        Toast.makeText(this, "Map imported successfully", Toast.LENGTH_LONG).show()
     }
 
-    private fun getMapBaseBitmap(fileName: String): Bitmap? {
-        val baseFile = File(filesDir, "$fileName.base.png")
+    private fun getFloat(obj: JSONObject, vararg keys: String): Float? {
+        for (key in keys) {
+            if (!obj.has(key) || obj.isNull(key)) continue
 
-        if (baseFile.exists()) {
-            return BitmapFactory.decodeFile(baseFile.absolutePath)
-        }
+            val value = obj.opt(key)
 
-        val sourceFile = File(filesDir, "$fileName.source")
-
-        if (sourceFile.exists()) {
-            val sourceName = sourceFile.readText().trim()
-
-            try {
-                assets.open(sourceName).use {
-                    return BitmapFactory.decodeStream(it)
-                }
-            } catch (_: Exception) {}
-
-            val resId = resources.getIdentifier(sourceName, "drawable", packageName)
-
-            if (resId != 0) {
-                val options = BitmapFactory.Options().apply {
-                    inScaled = false
-                }
-
-                return BitmapFactory.decodeResource(resources, resId, options)
+            val number = when (value) {
+                is Number -> value.toFloat()
+                is String -> value.toFloatOrNull()
+                else -> null
             }
-        }
 
-        val previewFile = File(filesDir, "$fileName.png")
-
-        if (previewFile.exists()) {
-            return BitmapFactory.decodeFile(previewFile.absolutePath)
+            if (number != null && number.isFinite()) {
+                return number
+            }
         }
 
         return null
     }
 
-    private fun createFlattenedPreview(fileName: String) {
-        val base = getMapBaseBitmap(fileName)
-            ?: throw IllegalArgumentException("Invalid base map")
+    private fun getMapObjectColor(obj: JSONObject): String {
+        val value = obj.opt("color")
+            ?: obj.opt("colour")
+            ?: obj.opt("color[]")
+            ?: return ""
 
-        val preview = base.copy(Bitmap.Config.ARGB_8888, true)
-        base.recycle()
+        return when (value) {
+            is String -> normalizeColor(value)
 
-        try {
-            val metadataFile = File(filesDir, "$fileName.tactics.json")
+            is JSONArray -> {
+                if (value.length() >= 3) {
+                    val r = value.optInt(0).coerceIn(0, 255)
+                    val g = value.optInt(1).coerceIn(0, 255)
+                    val b = value.optInt(2).coerceIn(0, 255)
 
-            if (metadataFile.exists()) {
-                val metadata = JSONObject(metadataFile.readText())
-                val tactics = metadata.optJSONArray("tactics") ?: JSONArray()
-
-                if (tactics.length() > 0) {
-                    val active = metadata.optInt("active", 0).coerceIn(0, tactics.length() - 1)
-                    val id = tactics.getJSONObject(active).getString("id")
-                    val overlayFile = File(filesDir, "$fileName.$id.png")
-
-                    if (overlayFile.exists()) {
-                        val overlay = BitmapFactory.decodeFile(overlayFile.absolutePath)
-
-                        if (overlay != null) {
-                            Canvas(preview).drawBitmap(
-                                overlay,
-                                0f,
-                                0f,
-                                Paint(Paint.FILTER_BITMAP_FLAG)
-                            )
-                            overlay.recycle()
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Preview creation error", e)
-        }
-
-        File(filesDir, "$fileName.png").outputStream().use {
-            preview.compress(Bitmap.CompressFormat.PNG, 100, it)
-        }
-
-        preview.recycle()
-    }
-
-    private fun createVectorOverlay(file: File, width: Int, height: Int): Bitmap? {
-        if (!file.exists() || width <= 0 || height <= 0) return null
-
-        return try {
-            val data = JSONArray(file.readText())
-            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bitmap)
-            val scale = minOf(width, height).toFloat()
-
-            for (i in 0 until data.length()) {
-                val item = data.optJSONObject(i) ?: continue
-                val clear = item.optBoolean("clear", false)
-                val points = item.optJSONArray("points") ?: JSONArray()
-
-                if (points.length() == 0) {
-                    if (clear) bitmap.eraseColor(Color.TRANSPARENT)
-                    continue
-                }
-
-                val path = Path()
-                var hasFirstPoint = false
-
-                for (j in 0 until points.length()) {
-                    val point = points.optJSONArray(j) ?: continue
-                    if (point.length() < 2) continue
-
-                    val x = (point.optDouble(0) * width).toFloat()
-                    val y = (point.optDouble(1) * height).toFloat()
-
-                    if (!x.isFinite() || !y.isFinite()) continue
-
-                    if (!hasFirstPoint) {
-                        path.moveTo(x, y)
-                        hasFirstPoint = true
-                    } else {
-                        path.lineTo(x, y)
-                    }
-                }
-
-                if (!hasFirstPoint) continue
-
-                val paint = Paint().apply {
-                    color = item.optInt("color", Color.BLUE)
-                    strokeWidth = item.optDouble("stroke", 0.01).toFloat() * scale
-                    isAntiAlias = true
-                    style = Paint.Style.STROKE
-                    strokeJoin = Paint.Join.ROUND
-                    strokeCap = Paint.Cap.ROUND
-
-                    if (clear) {
-                        xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
-                    }
-                }
-
-                canvas.drawPath(path, paint)
-            }
-
-            bitmap
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Vector overlay error", e)
-            null
-        }
-    }
-
-    private fun writeVarInt(output: DataOutputStream, value: Int) {
-        var number = value
-        while ((number and -128) != 0) {
-            output.writeByte((number and 127) or 128)
-            number = number ushr 7
-        }
-        output.writeByte(number)
-    }
-
-    private fun readVarInt(input: DataInputStream): Int {
-        var result = 0
-        var shift = 0
-
-        while (shift < 35) {
-            val value = input.readUnsignedByte()
-            result = result or ((value and 127) shl shift)
-
-            if ((value and 128) == 0) return result
-
-            shift += 7
-        }
-
-        throw IllegalArgumentException("Invalid variable integer")
-    }
-
-    private fun zigZagEncode(value: Int): Int {
-        return (value shl 1) xor (value shr 31)
-    }
-
-    private fun zigZagDecode(value: Int): Int {
-        return (value ushr 1) xor -(value and 1)
-    }
-
-    private fun encodeVectorActions(file: File): ByteArray? {
-        if (!file.exists()) return null
-
-        return try {
-            val actions = JSONArray(file.readText())
-            if (actions.length() == 0) return null
-
-            val output = ByteArrayOutputStream()
-            val data = DataOutputStream(output)
-
-            data.writeInt(vectorMagic)
-            writeVarInt(data, actions.length())
-
-            for (i in 0 until actions.length()) {
-                val item = actions.getJSONObject(i)
-                val clear = item.optBoolean("clear", false)
-                val color = item.optInt("color", Color.BLUE)
-                val stroke = item.optDouble("stroke", 0.01).toFloat()
-                val points = item.optJSONArray("points") ?: JSONArray()
-
-                data.writeByte(if (clear) 1 else 0)
-                data.writeInt(color)
-                data.writeFloat(stroke)
-                writeVarInt(data, points.length())
-
-                var previousX = 0
-                var previousY = 0
-
-                for (j in 0 until points.length()) {
-                    val point = points.optJSONArray(j) ?: JSONArray()
-
-                    val x = (point.optDouble(0, 0.0).coerceIn(0.0, 1.0) * 65535.0).toInt()
-                    val y = (point.optDouble(1, 0.0).coerceIn(0.0, 1.0) * 65535.0).toInt()
-
-                    writeVarInt(data, zigZagEncode(x - previousX))
-                    writeVarInt(data, zigZagEncode(y - previousY))
-
-                    previousX = x
-                    previousY = y
+                    String.format("#%02X%02X%02X", r, g, b)
+                } else {
+                    ""
                 }
             }
 
-            data.flush()
-            data.close()
-
-            output.toByteArray()
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Vector encoding error", e)
-            null
+            else -> ""
         }
     }
 
-    private fun decodeVectorActions(bytes: ByteArray): JSONArray {
-        val result = JSONArray()
+    private fun normalizeColor(color: String): String {
+        var result = color.trim().uppercase()
 
-        DataInputStream(ByteArrayInputStream(bytes)).use { data ->
-            val magic = data.readInt()
-
-            if (magic == 0x57544D31) {
-                val actionCount = data.readInt()
-
-                if (actionCount < 0 || actionCount > 100000) {
-                    throw IllegalArgumentException("Invalid action count")
-                }
-
-                for (i in 0 until actionCount) {
-                    val clear = data.readUnsignedByte() != 0
-                    val color = data.readInt()
-                    val stroke = data.readFloat()
-                    val pointCount = data.readInt()
-
-                    if (pointCount < 0 || pointCount > 2000000) {
-                        throw IllegalArgumentException("Invalid point count")
-                    }
-
-                    val points = JSONArray()
-
-                    for (j in 0 until pointCount) {
-                        val x = data.readUnsignedShort() / 65535.0
-                        val y = data.readUnsignedShort() / 65535.0
-                        points.put(JSONArray().put(x).put(y))
-                    }
-
-                    result.put(
-                        JSONObject()
-                            .put("clear", clear)
-                            .put("color", color)
-                            .put("stroke", stroke.toDouble())
-                            .put("points", points)
-                    )
-                }
-            } else if (magic == vectorMagic) {
-                val actionCount = readVarInt(data)
-
-                if (actionCount < 0 || actionCount > 100000) {
-                    throw IllegalArgumentException("Invalid action count")
-                }
-
-                for (i in 0 until actionCount) {
-                    val clear = data.readUnsignedByte() != 0
-                    val color = data.readInt()
-                    val stroke = data.readFloat()
-                    val pointCount = readVarInt(data)
-
-                    if (pointCount < 0 || pointCount > 2000000) {
-                        throw IllegalArgumentException("Invalid point count")
-                    }
-
-                    val points = JSONArray()
-                    var previousX = 0
-                    var previousY = 0
-
-                    for (j in 0 until pointCount) {
-                        previousX += zigZagDecode(readVarInt(data))
-                        previousY += zigZagDecode(readVarInt(data))
-
-                        if (previousX !in 0..65535 || previousY !in 0..65535) {
-                            throw IllegalArgumentException("Invalid vector coordinates")
-                        }
-
-                        val x = previousX / 65535.0
-                        val y = previousY / 65535.0
-
-                        points.put(JSONArray().put(x).put(y))
-                    }
-
-                    result.put(
-                        JSONObject()
-                            .put("clear", clear)
-                            .put("color", color)
-                            .put("stroke", stroke.toDouble())
-                            .put("points", points)
-                    )
-                }
-            } else {
-                throw IllegalArgumentException("Invalid vector format")
-            }
-
-            if (data.available() != 0) {
-                throw IllegalArgumentException("Unexpected vector data")
-            }
+        if (!result.startsWith("#")) {
+            result = "#$result"
         }
 
         return result
     }
 
-    private fun shareCurrentMap() {
-        try {
-            val link = createMapLink() ?: return
-            val qrBitmap = generateQrCode(link)
+    private fun parseColorOrDefault(color: String, defaultColor: Int): Int {
+        if (color.isBlank()) return defaultColor
 
-            testQrCode(qrBitmap, link)
-            showShareDialog(link, qrBitmap)
-        } catch (e: WriterException) {
-            Log.e("MainActivity", "QR generation error", e)
-            Toast.makeText(
-                this,
-                "Map and tactics are too large for one QR code. Reduce the map size or drawings.",
-                Toast.LENGTH_LONG
-            ).show()
+        return try {
+            Color.parseColor(normalizeColor(color))
         } catch (e: Exception) {
-            Log.e("MainActivity", "Share error", e)
-            Toast.makeText(
-                this,
-                "Unable to generate QR code: ${e.localizedMessage}",
-                Toast.LENGTH_LONG
-            ).show()
+            defaultColor
         }
     }
 
-    private fun createMapLink(): String? {
-        val entry = selectedMap ?: return null
-        if (!entry.isSaved) return null
+    private fun isFriendlyColor(color: String): Boolean {
+        if (color.isBlank()) return false
 
-        val archive = createTacticPackage(entry.fileName) ?: return null
+        val normalized = normalizeColor(color)
 
-        val encoded = Base64.encodeToString(
-            archive,
-            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
-        )
+        if (normalized in FRIENDLY_COLORS) return true
 
-        return Uri.Builder()
-            .scheme("warthundermap")
-            .authority("load")
-            .appendQueryParameter("pkg", encoded)
-            .build()
-            .toString()
-    }
+        return try {
+            val parsed = Color.parseColor(normalized)
+            val red = Color.red(parsed)
+            val green = Color.green(parsed)
+            val blue = Color.blue(parsed)
 
-    private fun createTacticPackage(fileName: String): ByteArray? {
-        val output = ByteArrayOutputStream()
-
-        try {
-            ZipOutputStream(output).use { zip ->
-                val sourceFile = File(filesDir, "$fileName.source")
-                val sourceName = if (sourceFile.exists()) {
-                    sourceFile.readText().trim()
-                } else ""
-
-                val sourceRes = if (sourceName.isNotBlank()) {
-                    resources.getIdentifier(sourceName, "drawable", packageName)
-                } else 0
-
-                if (sourceRes != 0) {
-                    zip.putNextEntry(ZipEntry("source.txt"))
-                    zip.write(sourceName.toByteArray(Charsets.UTF_8))
-                    zip.closeEntry()
-                } else {
-                    val baseFile = File(filesDir, "$fileName.base.png")
-                    val previewFile = File(filesDir, "$fileName.png")
-                    val sourceBase = if (baseFile.exists()) baseFile else previewFile
-
-                    if (!sourceBase.exists()) {
-                        Toast.makeText(this, "Map image not found", Toast.LENGTH_SHORT).show()
-                        return null
-                    }
-
-                    addFileToZip(zip, sourceBase, "base.png")
-                }
-
-                val legendFile = File(filesDir, "$fileName.legend")
-                if (legendFile.exists()) {
-                    addFileToZip(zip, legendFile, "legend.txt")
-                }
-
-                val metadataFile = File(filesDir, "$fileName.tactics.json")
-                val metadata = if (metadataFile.exists()) {
-                    JSONObject(metadataFile.readText())
-                } else {
-                    JSONObject().apply {
-                        put(
-                            "tactics",
-                            JSONArray().put(
-                                JSONObject().apply {
-                                    put("id", "t0")
-                                    put("name", "Tactic 1")
-                                }
-                            )
-                        )
-                        put("active", 0)
-                    }
-                }
-
-                zip.putNextEntry(ZipEntry("tactics.json"))
-                zip.write(metadata.toString().toByteArray(Charsets.UTF_8))
-                zip.closeEntry()
-
-                val tactics = metadata.optJSONArray("tactics") ?: JSONArray()
-
-                for (i in 0 until tactics.length()) {
-                    val id = tactics.getJSONObject(i).getString("id")
-                    if (!id.matches(Regex("[a-zA-Z0-9_-]+"))) continue
-
-                    val vectorFile = File(filesDir, "$fileName.$id.json")
-                    val bitmapFile = File(filesDir, "$fileName.$id.png")
-
-                    val binaryData = if (vectorFile.exists()) {
-                        encodeVectorActions(vectorFile)
-                    } else null
-
-                    if (binaryData != null && binaryData.isNotEmpty()) {
-                        zip.putNextEntry(ZipEntry("tactics/$id.bin"))
-                        zip.write(binaryData)
-                        zip.closeEntry()
-                    } else if (bitmapFile.exists()) {
-                        addFileToZip(zip, bitmapFile, "tactics/$id.png")
-                    } else if (vectorFile.exists()) {
-                        addFileToZip(zip, vectorFile, "tactics/$id.json")
-                    }
-                }
-            }
-
-            return output.toByteArray()
+            (blue > red * 1.25f && blue > green * 0.8f) ||
+                    (green > red * 1.3f && green > blue * 0.8f)
         } catch (e: Exception) {
-            Log.e("MainActivity", "Package creation error", e)
-            Toast.makeText(this, "Unable to prepare map package", Toast.LENGTH_SHORT).show()
-            return null
+            false
         }
     }
 
-    private fun addFileToZip(zip: ZipOutputStream, file: File, name: String) {
-        zip.putNextEntry(ZipEntry(name))
-        file.inputStream().use { it.copyTo(zip) }
-        zip.closeEntry()
-    }
+    private fun clusterSpawnPoints(points: List<SpawnPoint>): List<SpawnSector> {
+        if (points.isEmpty()) return emptyList()
 
-    private fun generateQrCode(link: String): Bitmap {
-        val hints = mapOf<EncodeHintType, Any>(
-            EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
-            EncodeHintType.CHARACTER_SET to "UTF-8",
-            EncodeHintType.MARGIN to 4
-        )
+        val remaining = points.toMutableList()
+        val sectors = mutableListOf<SpawnSector>()
 
-        val matrix = QRCodeWriter().encode(
-            link,
-            BarcodeFormat.QR_CODE,
-            900,
-            900,
-            hints
-        )
+        while (remaining.isNotEmpty()) {
+            val cluster = mutableListOf<SpawnPoint>()
+            val queue = ArrayDeque<SpawnPoint>()
 
-        val size = 900
-        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val scale = minOf(size / matrix.width, size / matrix.height)
-        val offsetX = (size - matrix.width * scale) / 2
-        val offsetY = (size - matrix.height * scale) / 2
+            queue.add(remaining.removeAt(0))
 
-        bitmap.eraseColor(Color.WHITE)
+            while (queue.isNotEmpty()) {
+                val current = queue.removeFirst()
+                cluster.add(current)
 
-        for (x in 0 until matrix.width) {
-            for (y in 0 until matrix.height) {
-                if (matrix[x, y]) {
-                    for (dx in 0 until scale) {
-                        for (dy in 0 until scale) {
-                            bitmap.setPixel(
-                                offsetX + x * scale + dx,
-                                offsetY + y * scale + dy,
-                                Color.BLACK
-                            )
-                        }
-                    }
+                val nearby = remaining.filter {
+                    distance(current.x, current.y, it.x, it.y) <= SPAWN_CLUSTER_DISTANCE
+                }
+
+                for (point in nearby) {
+                    remaining.remove(point)
+                    queue.add(point)
                 }
             }
-        }
 
-        return bitmap
-    }
-
-    private fun showShareDialog(link: String, qrBitmap: Bitmap) {
-        val density = resources.displayMetrics.density
-        val screenWidth = resources.configuration.screenWidthDp
-        val screenHeight = resources.configuration.screenHeightDp
-
-        val dialogWidth = (screenWidth - 32).coerceAtLeast(240)
-        val maxDialogHeight = (screenHeight * 0.85f).toInt()
-        val qrSize = minOf(360, dialogWidth - 48, (maxDialogHeight * 0.48f).toInt()).coerceAtLeast(120)
-
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(
-                (16 * density).toInt(),
-                (12 * density).toInt(),
-                (16 * density).toInt(),
-                (12 * density).toInt()
-            )
-        }
-
-        val qrImage = ImageView(this).apply {
-            setImageBitmap(qrBitmap)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            adjustViewBounds = true
-            setBackgroundColor(Color.WHITE)
-        }
-
-        container.addView(
-            qrImage,
-            LinearLayout.LayoutParams(
-                (qrSize * density).toInt(),
-                (qrSize * density).toInt()
-            ).apply {
-                gravity = Gravity.CENTER_HORIZONTAL
-            }
-        )
-
-        val description = TextView(this).apply {
-            text = "Scan this QR code to import the map, all tactics and the legend"
-            textSize = 14f
-            gravity = Gravity.CENTER
-            setTextColor(Color.GRAY)
-            setPadding(0, (12 * density).toInt(), 0, (12 * density).toInt())
-        }
-
-        container.addView(description)
-
-        val linkLabel = TextView(this).apply {
-            text = "Map link"
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            setPadding(0, (8 * density).toInt(), 0, (6 * density).toInt())
-        }
-
-        container.addView(linkLabel)
-
-        val linkText = TextView(this).apply {
-            text = link
-            textSize = 12f
-            setTextColor(Color.rgb(80, 160, 255))
-            setPadding(
-                (10 * density).toInt(),
-                (10 * density).toInt(),
-                (10 * density).toInt(),
-                (10 * density).toInt()
-            )
-            setBackgroundResource(R.drawable.dark_input_background)
-            isClickable = true
-            isFocusable = true
-            maxLines = 5
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-
-        container.addView(
-            linkText,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        )
-
-        val copyButton = Button(this).apply {
-            text = "Copy link"
-            setOnClickListener {
-                val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("War Thunder Map", link))
-
-                Toast.makeText(this@MainActivity, "Link copied", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        container.addView(
-            copyButton,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = (8 * density).toInt()
-            }
-        )
-
-        val scrollView = ScrollView(this).apply {
-            isFillViewport = true
-            isVerticalScrollBarEnabled = true
-            clipToPadding = false
-            addView(
-                container,
-                ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
+            sectors.add(
+                SpawnSector(
+                    points = cluster,
+                    color = cluster.first().color,
+                    type = cluster.first().type
                 )
             )
         }
 
-        val dialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Share map")
-            .setView(scrollView)
-            .setNegativeButton("Close", null)
-            .create()
+        return sectors
+    }
 
-        dialog.setOnDismissListener {
-            if (!qrBitmap.isRecycled) qrBitmap.recycle()
-        }
+    private fun distance(
+        x1: Float,
+        y1: Float,
+        x2: Float,
+        y2: Float
+    ): Float {
+        return hypot(x2 - x1, y2 - y1)
+    }
 
-        dialog.show()
+    override fun onDestroy() {
+        updateTask?.cancel(true)
+        scheduler.shutdownNow()
+        apiClient.disconnect()
+        super.onDestroy()
+    }
 
-        dialog.window?.apply {
-            setLayout(
-                (dialogWidth * density).toInt(),
-                (maxDialogHeight * density).toInt()
+    data class MapData(
+        val markers: List<MapMarker>,
+        val sectors: List<SpawnSector>,
+        val isAirView: Boolean
+    )
+
+    data class MapMarker(
+        val x: Float,
+        val y: Float,
+        val label: String,
+        val color: Int,
+        val type: MarkerType,
+        val directionX: Float = 0f,
+        val directionY: Float = -1f
+    )
+
+    data class SpawnPoint(
+        val x: Float,
+        val y: Float,
+        val color: String,
+        val type: String
+    )
+
+    data class SpawnSector(
+        val points: List<SpawnPoint>,
+        val color: String,
+        val type: String
+    )
+
+    enum class MarkerType {
+        CAPTURE,
+        TEAMMATE,
+        AIRCRAFT_TEAMMATE,
+        PLAYER,
+        PLAYER_AIRCRAFT
+    }
+
+    private inner class MapOverlayView : View(this@MainActivity) {
+
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val imageRect = RectF()
+        private val bitmapRect = RectF()
+
+        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.create(
+                "sans-serif-condensed",
+                Typeface.BOLD
             )
-            setBackgroundDrawableResource(android.R.color.background_light)
         }
-    }
 
-    private fun loadSharedMap() {
-        val options = GmsBarcodeScannerOptions.Builder()
-            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-            .enableAutoZoom()
-            .build()
-
-        val scanner = GmsBarcodeScanning.getClient(this, options)
-
-        scanner.startScan()
-            .addOnSuccessListener { barcode ->
-                val value = barcode.rawValue
-
-                if (value.isNullOrBlank()) {
-                    Toast.makeText(this, "Invalid QR code", Toast.LENGTH_SHORT).show()
-                    return@addOnSuccessListener
-                }
-
-                handleCustomLink(Intent().setData(Uri.parse(value)))
-            }
-            .addOnCanceledListener {
-                Toast.makeText(this, "Scanning cancelled", Toast.LENGTH_SHORT).show()
-            }
-            .addOnFailureListener { e ->
-                Log.e("MainActivity", "QR scan error", e)
-                Toast.makeText(
-                    this,
-                    "Unable to scan QR code: ${e.localizedMessage}",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-    }
-
-    private fun loadImageForSelectedMap(entry: MapEntry) {
-        if (entry.isSaved) {
-            val baseFile = File(filesDir, "${entry.fileName}.base.png")
-            val sourceFile = File(filesDir, "${entry.fileName}.source")
-            val previewFile = File(filesDir, "${entry.fileName}.png")
-
-            when {
-                baseFile.exists() -> {
-                    val bitmap = BitmapFactory.decodeFile(baseFile.absolutePath)
-
-                    if (bitmap != null) {
-                        image.setImageBitmap(bitmap)
-                        searchMapHint.visibility = View.GONE
-                        edit.visibility = View.VISIBLE
-                    } else {
-                        image.setImageDrawable(null)
-                        searchMapHint.visibility = View.VISIBLE
-                        edit.visibility = View.GONE
-                    }
-                }
-
-                sourceFile.exists() -> {
-                    val sourceName = sourceFile.readText().trim()
-
-                    val bitmap = try {
-                        assets.open(sourceName).use {
-                            BitmapFactory.decodeStream(it)
-                        }
-                    } catch (_: Exception) {
-                        null
-                    }
-
-                    if (bitmap != null) {
-                        image.setImageBitmap(bitmap)
-                        searchMapHint.visibility = View.GONE
-                        edit.visibility = View.VISIBLE
-                    } else {
-                        val resId = resources.getIdentifier(sourceName, "drawable", packageName)
-
-                        if (resId != 0) {
-                            image.setImageResource(resId)
-                            searchMapHint.visibility = View.GONE
-                            edit.visibility = View.VISIBLE
-                        } else if (previewFile.exists()) {
-                            val preview = BitmapFactory.decodeFile(previewFile.absolutePath)
-
-                            if (preview != null) {
-                                image.setImageBitmap(preview)
-                                searchMapHint.visibility = View.GONE
-                                edit.visibility = View.VISIBLE
-                            } else {
-                                image.setImageDrawable(null)
-                                searchMapHint.visibility = View.VISIBLE
-                                edit.visibility = View.GONE
-                            }
-                        } else {
-                            image.setImageDrawable(null)
-                            searchMapHint.visibility = View.VISIBLE
-                            edit.visibility = View.GONE
-                        }
-                    }
-                }
-
-                previewFile.exists() -> {
-                    val bitmap = BitmapFactory.decodeFile(previewFile.absolutePath)
-
-                    if (bitmap != null) {
-                        image.setImageBitmap(bitmap)
-                        searchMapHint.visibility = View.GONE
-                        edit.visibility = View.VISIBLE
-                    } else {
-                        image.setImageDrawable(null)
-                        searchMapHint.visibility = View.VISIBLE
-                        edit.visibility = View.GONE
-                    }
-                }
-
-                else -> {
-                    image.setImageDrawable(null)
-                    searchMapHint.visibility = View.VISIBLE
-                    edit.visibility = View.GONE
-                }
-            }
-
-            share.visibility = View.VISIBLE
-            share.text = "Share"
-        } else {
-            val bitmap = try {
-                assets.open(entry.assetPath).use {
-                    BitmapFactory.decodeStream(it)
-                }
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Map asset load failed: ${entry.assetPath}", e)
-                null
-            }
-
-            if (bitmap != null) {
-                image.setImageBitmap(bitmap)
-                searchMapHint.visibility = View.GONE
-                edit.visibility = View.VISIBLE
-            } else {
-                image.setImageDrawable(null)
-                searchMapHint.visibility = View.VISIBLE
-                edit.visibility = View.GONE
-                Toast.makeText(this, "Map image could not be loaded", Toast.LENGTH_SHORT).show()
-            }
-
-            share.visibility = View.VISIBLE
-            share.text = "Load"
+        private val textBackgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(15, 20, 28)
+            style = Paint.Style.FILL
         }
-    }
 
-    private fun getSavedMaps(): List<String> {
-        return filesDir.listFiles()
-            ?.filter {
-                it.isFile && it.name.matches(Regex("saved_[a-zA-Z0-9_]+\\.png"))
+        private val aircraftPath = Path().apply {
+            moveTo(0f, -9f)
+            lineTo(1.8f, -2.5f)
+            lineTo(7f, 2f)
+            lineTo(7f, 3.5f)
+            lineTo(1.5f, 2f)
+            lineTo(1.5f, 6f)
+            lineTo(3f, 7.5f)
+            lineTo(3f, 8.5f)
+            lineTo(0f, 7.5f)
+            lineTo(-3f, 8.5f)
+            lineTo(-3f, 7.5f)
+            lineTo(-1.5f, 6f)
+            lineTo(-1.5f, 2f)
+            lineTo(-7f, 3.5f)
+            lineTo(-7f, 2f)
+            lineTo(-1.8f, -2.5f)
+            close()
+        }
+
+        private var mapData = MapData(
+            emptyList(),
+            emptyList(),
+            false
+        )
+
+        fun setMapData(data: MapData) {
+            mapData = data
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+
+            val bitmap = currentBitmap ?: return
+            if (image.drawable == null) return
+
+            bitmapRect.set(
+                0f,
+                0f,
+                bitmap.width.toFloat(),
+                bitmap.height.toFloat()
+            )
+
+            imageRect.set(bitmapRect)
+            image.imageMatrix.mapRect(imageRect)
+
+            imageRect.offset(
+                image.left.toFloat() + image.paddingLeft,
+                image.top.toFloat() + image.paddingTop
+            )
+
+            if (
+                imageRect.width() <= 0f ||
+                imageRect.height() <= 0f
+            ) return
+
+            drawSpawnSectors(canvas, imageRect)
+            drawMarkers(canvas, imageRect)
+        }
+
+        private fun drawSpawnSectors(canvas: Canvas, mapRect: RectF) {
+            val density = resources.displayMetrics.density
+
+            for (sector in mapData.sectors) {
+                val color = parseColorOrDefault(
+                    sector.color,
+                    Color.rgb(90, 150, 255)
+                )
+
+                val hull = convexHull(sector.points)
+
+                if (hull.isEmpty()) continue
+
+                var centerX = 0f
+                var centerY = 0f
+
+                for (point in sector.points) {
+                    centerX += point.x
+                    centerY += point.y
+                }
+
+                centerX /= sector.points.size.coerceAtLeast(1)
+                centerY /= sector.points.size.coerceAtLeast(1)
+
+                when {
+                    hull.size >= 3 -> {
+                        val path = Path()
+
+                        path.moveTo(
+                            mapRect.left + hull[0].x * mapRect.width(),
+                            mapRect.top + hull[0].y * mapRect.height()
+                        )
+
+                        for (i in 1 until hull.size) {
+                            path.lineTo(
+                                mapRect.left + hull[i].x * mapRect.width(),
+                                mapRect.top + hull[i].y * mapRect.height()
+                            )
+                        }
+
+                        path.close()
+
+                        paint.style = Paint.Style.FILL
+                        paint.color = color
+                        paint.alpha = 10
+                        canvas.drawPath(path, paint)
+
+                        paint.style = Paint.Style.STROKE
+                        paint.color = color
+                        paint.alpha = 190
+                        paint.strokeWidth = 1f * density
+                        paint.pathEffect = null
+                        canvas.drawPath(path, paint)
+                    }
+
+                    hull.size == 2 -> {
+                        paint.style = Paint.Style.STROKE
+                        paint.color = color
+                        paint.alpha = 190
+                        paint.strokeWidth = 1f * density
+                        paint.strokeCap = Paint.Cap.ROUND
+
+                        canvas.drawLine(
+                            mapRect.left + hull[0].x * mapRect.width(),
+                            mapRect.top + hull[0].y * mapRect.height(),
+                            mapRect.left + hull[1].x * mapRect.width(),
+                            mapRect.top + hull[1].y * mapRect.height(),
+                            paint
+                        )
+                    }
+
+                    hull.size == 1 -> {
+                        paint.style = Paint.Style.STROKE
+                        paint.color = color
+                        paint.alpha = 190
+                        paint.strokeWidth = 0.8f * density
+
+                        canvas.drawCircle(
+                            mapRect.left + hull[0].x * mapRect.width(),
+                            mapRect.top + hull[0].y * mapRect.height(),
+                            2f * density,
+                            paint
+                        )
+                    }
+                }
+
+                if (hull.size >= 3) {
+                    val bounds = RectF(
+                        mapRect.left + hull.minOf { it.x } * mapRect.width(),
+                        mapRect.top + hull.minOf { it.y } * mapRect.height(),
+                        mapRect.left + hull.maxOf { it.x } * mapRect.width(),
+                        mapRect.top + hull.maxOf { it.y } * mapRect.height()
+                    )
+
+                    val labelX = mapRect.left + centerX * mapRect.width()
+                    val labelY = mapRect.top + centerY * mapRect.height()
+
+                    drawFitLabel(
+                        canvas,
+                        sector.type,
+                        labelX,
+                        labelY,
+                        color,
+                        bounds,
+                        10f * density
+                    )
+                }
             }
-            ?.map {
-                it.name.removePrefix("saved_").removeSuffix(".png")
+
+            paint.pathEffect = null
+        }
+
+        private fun drawMarkers(canvas: Canvas, mapRect: RectF) {
+            val density = resources.displayMetrics.density
+
+            val captureRadius = 7f * density
+            val teammateWidth = 5f * density
+            val teammateHeight = 3f * density
+            val playerWidth = 7f * density
+            val playerHeight = 4f * density
+            val outlineWidth = 0.7f * density
+
+            for (marker in mapData.markers) {
+                val x = mapRect.left + marker.x * mapRect.width()
+                val y = mapRect.top + marker.y * mapRect.height()
+
+                when (marker.type) {
+                    MarkerType.CAPTURE -> {
+                        paint.style = Paint.Style.STROKE
+                        paint.strokeWidth = 1f * density
+                        paint.color = marker.color
+                        paint.alpha = 190
+                        canvas.drawCircle(x, y, captureRadius, paint)
+
+                        if (marker.label.isNotBlank()) {
+                            textPaint.color = Color.BLACK
+                            textPaint.style = Paint.Style.FILL
+                            textPaint.textSize = 12f * density
+                            textPaint.textAlign = Paint.Align.CENTER
+                            textPaint.typeface = Typeface.create(
+                                Typeface.DEFAULT,
+                                Typeface.BOLD
+                            )
+
+                            val textY = y - (textPaint.ascent() + textPaint.descent()) / 2f
+                            canvas.drawText(marker.label, x, textY, textPaint)
+                        }
+                    }
+
+                    MarkerType.TEAMMATE -> {
+                        if (!mapData.isAirView) {
+                            drawRectangleMarker(
+                                canvas,
+                                x,
+                                y,
+                                teammateWidth,
+                                teammateHeight,
+                                marker.color,
+                                outlineWidth
+                            )
+                        }
+                    }
+
+                    MarkerType.PLAYER -> {
+                        if (!mapData.isAirView) {
+                            drawRectangleMarker(
+                                canvas,
+                                x,
+                                y,
+                                playerWidth,
+                                playerHeight,
+                                Color.WHITE,
+                                outlineWidth
+                            )
+                        }
+                    }
+
+                    MarkerType.AIRCRAFT_TEAMMATE -> {
+                        if (mapData.isAirView) {
+                            drawAircraftMarker(
+                                canvas,
+                                x,
+                                y,
+                                marker.directionX,
+                                marker.directionY,
+                                marker.color,
+                                density
+                            )
+                        }
+                    }
+
+                    MarkerType.PLAYER_AIRCRAFT -> {
+                        if (mapData.isAirView) {
+                            drawAircraftMarker(
+                                canvas,
+                                x,
+                                y,
+                                marker.directionX,
+                                marker.directionY,
+                                Color.WHITE,
+                                density
+                            )
+                        }
+                    }
+                }
             }
-            ?: emptyList()
+        }
+
+        private fun drawAircraftMarker(
+            canvas: Canvas,
+            x: Float,
+            y: Float,
+            directionX: Float,
+            directionY: Float,
+            color: Int,
+            density: Float
+        ) {
+            val angle = Math.toDegrees(
+                atan2(
+                    directionY.toDouble(),
+                    directionX.toDouble()
+                )
+            ).toFloat() + 90f
+
+            val scale = 1.15f * density
+
+            canvas.save()
+            canvas.translate(x, y)
+            canvas.rotate(angle)
+            canvas.scale(scale, scale)
+
+            paint.style = Paint.Style.FILL
+            paint.color = color
+            paint.alpha = 255
+            canvas.drawPath(aircraftPath, paint)
+
+            paint.style = Paint.Style.STROKE
+            paint.color = Color.BLACK
+            paint.strokeWidth = 1.1f
+            paint.strokeJoin = Paint.Join.ROUND
+            paint.alpha = 255
+            canvas.drawPath(aircraftPath, paint)
+
+            canvas.restore()
+        }
+
+        private fun drawFitLabel(
+            canvas: Canvas,
+            text: String,
+            x: Float,
+            y: Float,
+            color: Int,
+            bounds: RectF,
+            maxTextSize: Float
+        ) {
+            if (text.isBlank()) return
+
+            val density = resources.displayMetrics.density
+            val horizontalPadding = 3f * density
+            val verticalPadding = 2f * density
+
+            val availableWidth = bounds.width() - horizontalPadding * 2f
+            val availableHeight = bounds.height() - verticalPadding * 2f
+
+            if (availableWidth <= 0f || availableHeight <= 0f) return
+
+            textPaint.textSize = maxTextSize
+            textPaint.style = Paint.Style.FILL
+
+            val initialWidth = textPaint.measureText(text)
+            val initialMetrics = textPaint.fontMetrics
+            val initialHeight = initialMetrics.descent - initialMetrics.ascent
+
+            if (initialWidth <= 0f || initialHeight <= 0f) return
+
+            val scale = minOf(
+                1f,
+                availableWidth / initialWidth,
+                availableHeight / initialHeight
+            )
+
+            textPaint.textSize = maxTextSize * scale
+
+            val metrics = textPaint.fontMetrics
+            val baseline = y - (metrics.ascent + metrics.descent) / 2f
+            val textWidth = textPaint.measureText(text)
+
+            val paddingX = minOf(horizontalPadding, availableWidth * 0.08f)
+            val paddingY = minOf(verticalPadding, availableHeight * 0.08f)
+
+            val background = RectF(
+                x - textWidth / 2f - paddingX,
+                baseline + metrics.ascent - paddingY,
+                x + textWidth / 2f + paddingX,
+                baseline + metrics.descent + paddingY
+            )
+
+            if (
+                background.left < bounds.left ||
+                background.right > bounds.right ||
+                background.top < bounds.top ||
+                background.bottom > bounds.bottom
+            ) return
+
+            canvas.drawRoundRect(
+                background,
+                2f * density * scale,
+                2f * density * scale,
+                textBackgroundPaint
+            )
+
+            textPaint.style = Paint.Style.STROKE
+            textPaint.strokeWidth = 1.5f * density * scale
+            textPaint.strokeJoin = Paint.Join.ROUND
+            textPaint.color = Color.BLACK
+
+            canvas.drawText(text, x, baseline, textPaint)
+
+            textPaint.style = Paint.Style.FILL
+            textPaint.color = Color.WHITE
+
+            canvas.drawText(text, x, baseline, textPaint)
+        }
+
+        private fun drawLabel(
+            canvas: Canvas,
+            text: String,
+            x: Float,
+            y: Float,
+            color: Int,
+            textSize: Float
+        ) {
+            if (text.isBlank()) return
+
+            val density = resources.displayMetrics.density
+
+            textPaint.textSize = textSize
+            textPaint.textAlign = Paint.Align.CENTER
+            textPaint.style = Paint.Style.FILL
+            textPaint.color = Color.WHITE
+
+            val metrics = textPaint.fontMetrics
+            val textWidth = textPaint.measureText(text)
+            val padding = 3f * density
+
+            val background = RectF(
+                x - textWidth / 2f - padding,
+                y + metrics.ascent - padding,
+                x + textWidth / 2f + padding,
+                y + metrics.descent + padding
+            )
+
+            canvas.drawRoundRect(
+                background,
+                3f * density,
+                3f * density,
+                textBackgroundPaint
+            )
+
+            textPaint.style = Paint.Style.STROKE
+            textPaint.strokeWidth = 2f * density
+            textPaint.strokeJoin = Paint.Join.ROUND
+            textPaint.color = Color.BLACK
+
+            canvas.drawText(text, x, y, textPaint)
+
+            textPaint.style = Paint.Style.FILL
+            textPaint.color = Color.WHITE
+
+            canvas.drawText(text, x, y, textPaint)
+        }
+
+        private fun drawRectangleMarker(
+            canvas: Canvas,
+            x: Float,
+            y: Float,
+            width: Float,
+            height: Float,
+            color: Int,
+            outlineWidth: Float
+        ) {
+            val rect = RectF(
+                x - width / 2f,
+                y - height / 2f,
+                x + width / 2f,
+                y + height / 2f
+            )
+
+            paint.style = Paint.Style.FILL
+            paint.color = color
+            paint.alpha = 255
+            canvas.drawRect(rect, paint)
+
+            paint.style = Paint.Style.STROKE
+            paint.color = Color.BLACK
+            paint.strokeWidth = outlineWidth
+            paint.alpha = 255
+            canvas.drawRect(rect, paint)
+        }
+
+        private fun convexHull(points: List<SpawnPoint>): List<PointF> {
+            val sorted = points
+                .map { PointF(it.x, it.y) }
+                .distinctBy { "${it.x}:${it.y}" }
+                .sortedWith(compareBy<PointF> { it.x }.thenBy { it.y })
+
+            if (sorted.size <= 2) return sorted
+
+            fun cross(o: PointF, a: PointF, b: PointF): Float {
+                return (a.x - o.x) * (b.y - o.y) -
+                        (a.y - o.y) * (b.x - o.x)
+            }
+
+            val lower = mutableListOf<PointF>()
+
+            for (point in sorted) {
+                while (
+                    lower.size >= 2 &&
+                    cross(lower[lower.size - 2], lower[lower.size - 1], point) <= 0f
+                ) {
+                    lower.removeAt(lower.lastIndex)
+                }
+
+                lower.add(point)
+            }
+
+            val upper = mutableListOf<PointF>()
+
+            for (point in sorted.asReversed()) {
+                while (
+                    upper.size >= 2 &&
+                    cross(upper[upper.size - 2], upper[upper.size - 1], point) <= 0f
+                ) {
+                    upper.removeAt(upper.lastIndex)
+                }
+
+                upper.add(point)
+            }
+
+            lower.removeAt(lower.lastIndex)
+            upper.removeAt(upper.lastIndex)
+
+            return lower + upper
+        }
     }
 }
