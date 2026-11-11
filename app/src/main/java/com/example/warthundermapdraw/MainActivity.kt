@@ -9,13 +9,17 @@ import android.graphics.Path
 import android.graphics.PointF
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.util.Log
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
@@ -33,15 +37,15 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "WarThunderScanner"
-        private const val UPDATE_INTERVAL = 500L
+        private const val UPDATE_INTERVAL = 200L
         private const val MIN_ZOOM = 1f
         private const val MAX_ZOOM = 5f
         private const val SPAWN_CLUSTER_DISTANCE = 0.035f
 
-        private val FRIENDLY_COLORS = setOf(
-            "#1952FF",
-            "#AAFF8E"
-        )
+        private const val TEAM_BLUE = "#1952FF"
+        private const val SQUAD_GREEN = "#AAFF8E"
+
+        private val FRIENDLY_COLORS = setOf(TEAM_BLUE, SQUAD_GREEN)
     }
 
     private lateinit var image: ImageView
@@ -49,6 +53,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var searchMapHint: TextView
     private lateinit var mapOverlay: MapOverlayView
     private lateinit var mapContainer: FrameLayout
+    private lateinit var mapLegend: LinearLayout
+    private lateinit var mapLegendScroll: HorizontalScrollView
     private lateinit var apiClient: WarThunderApiClient
     private lateinit var scaleDetector: ScaleGestureDetector
 
@@ -64,22 +70,16 @@ class MainActivity : AppCompatActivity() {
     private var hasLoadedImage = false
     private var lastGeneration = -1
     private var lastHudType = -1
-
     private var currentBitmap: Bitmap? = null
 
     private var zoom = 1f
     private var translateX = 0f
     private var translateY = 0f
-
     private var lastTouchX = 0f
     private var lastTouchY = 0f
     private var isDragging = false
 
-    private var currentMapData = MapData(
-        markers = emptyList(),
-        sectors = emptyList(),
-        isAirView = false
-    )
+    private var currentMapData = MapData(emptyList(), emptyList(), false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -106,6 +106,8 @@ class MainActivity : AppCompatActivity() {
         image = findViewById(R.id.Map)
         status = findViewById(R.id.ConnectionStatus)
         searchMapHint = findViewById(R.id.SearchMapHint)
+        mapLegend = findViewById(R.id.MapLegend)
+        mapLegendScroll = findViewById(R.id.MapLegendScroll)
 
         mapContainer = image.parent as? FrameLayout
             ?: throw IllegalStateException("Map ImageView must be inside a FrameLayout")
@@ -138,7 +140,6 @@ class MainActivity : AppCompatActivity() {
                 override fun onScale(detector: ScaleGestureDetector): Boolean {
                     val oldZoom = zoom
                     zoom = (zoom * detector.scaleFactor).coerceIn(MIN_ZOOM, MAX_ZOOM)
-
                     val factor = zoom / oldZoom
 
                     translateX = detector.focusX - (detector.focusX - translateX) * factor
@@ -156,7 +157,6 @@ class MainActivity : AppCompatActivity() {
 
         updateStatus("Searching for War Thunder...")
         updateMapHint("Waiting for War Thunder...")
-
         startSearching()
     }
 
@@ -211,18 +211,15 @@ class MainActivity : AppCompatActivity() {
                     if (apiClient.getServerAddress() == null) {
                         updateStatus("Connection lost. Searching again...")
                         updateMapHint("Searching for War Thunder...")
+                        updateLegend(MapData(emptyList(), emptyList(), false))
                     }
                     return@runOnUiThread
                 }
 
                 if (!data.info.optBoolean("valid", false)) {
-                    currentMapData = MapData(
-                        markers = emptyList(),
-                        sectors = emptyList(),
-                        isAirView = false
-                    )
-
+                    currentMapData = MapData(emptyList(), emptyList(), false)
                     mapOverlay.setMapData(currentMapData)
+                    updateLegend(currentMapData)
                     updateMapHint("Waiting for a battle...")
                     updateStatus("Connected: ${data.address}")
                     return@runOnUiThread
@@ -247,11 +244,9 @@ class MainActivity : AppCompatActivity() {
                         if (bitmap != null) {
                             currentBitmap = bitmap
                             image.setImageBitmap(bitmap)
-
                             hasLoadedImage = true
                             lastGeneration = generation
                             lastHudType = hudType
-
                             resetMapTransform()
 
                             image.post {
@@ -259,25 +254,104 @@ class MainActivity : AppCompatActivity() {
                                 mapOverlay.invalidate()
                             }
 
-                            Log.i(
-                                TAG,
-                                "Map image loaded: ${bitmap.width}x${bitmap.height}"
-                            )
+                            Log.i(TAG, "Map image loaded: ${bitmap.width}x${bitmap.height}")
                         }
                     }
                 }
 
-                if (currentBitmap != null) {
-                    updateMapHint("")
-                } else {
-                    updateMapHint("Loading map...")
-                }
+                updateMapHint(if (currentBitmap != null) "" else "Loading map...")
 
                 currentMapData = parseMapObjects(data.objects)
                 mapOverlay.setMapData(currentMapData)
-
+                updateLegend(currentMapData)
                 updateStatus("Connected: ${data.address}")
             }
+        }
+    }
+
+    private fun updateLegend(data: MapData) {
+        mapLegend.removeAllViews()
+
+        val visibleUnits = data.markers
+            .filter {
+                when {
+                    data.isAirView -> it.type == MarkerType.AIR_UNIT
+                    else -> it.type == MarkerType.GROUND_UNIT
+                }
+            }
+            .distinctBy { it.iconName }
+
+        if (visibleUnits.isEmpty()) {
+            mapLegendScroll.visibility = View.GONE
+            return
+        }
+
+        mapLegendScroll.visibility = View.VISIBLE
+
+        val labels = mapOf(
+            "LightTank" to "Light Tank",
+            "MediumTank" to "Medium Tank",
+            "HeavyTank" to "Heavy Tank",
+            "TankDestroyer" to "Tank Destroyer",
+            "SPAA" to "SPAA",
+            "Fighter" to "Fighter",
+            "Assault" to "Assault Aircraft",
+            "Bomber" to "Bomber",
+            "Helicopter" to "Helicopter",
+            "Ship" to "Ship",
+            "TorpedoBoat" to "Torpedo Boat",
+            "Frigate" to "Frigate",
+            "Gunboat" to "Gunboat",
+            "Destroyer" to "Destroyer",
+            "Cruiser" to "Cruiser",
+            "LightCruiser" to "Light Cruiser",
+            "HeavyCruiser" to "Heavy Cruiser",
+            "Battleship" to "Battleship",
+            "Battlecruiser" to "Battlecruiser"
+        )
+
+        val density = resources.displayMetrics.density
+
+        for (unit in visibleUnits) {
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(
+                    (8f * density).toInt(),
+                    0,
+                    (12f * density).toInt(),
+                    0
+                )
+            }
+
+            val icon = ImageView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    (19f * density).toInt(),
+                    (19f * density).toInt()
+                )
+                setImageResource(getWtIconRes(unit.iconName))
+                setColorFilter(unit.color)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                contentDescription = labels[unit.iconName] ?: unit.iconName
+            }
+
+            val name = TextView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    marginStart = (5f * density).toInt()
+                }
+                text = labels[unit.iconName] ?: unit.iconName
+                setTextColor(Color.rgb(220, 232, 245))
+                textSize = 10f
+                maxLines = 1
+                setTypeface(Typeface.DEFAULT, Typeface.BOLD)
+            }
+
+            item.addView(icon)
+            item.addView(name)
+            mapLegend.addView(item)
         }
     }
 
@@ -311,18 +385,13 @@ class MainActivity : AppCompatActivity() {
                     !scaleDetector.isInProgress &&
                     zoom > MIN_ZOOM
                 ) {
-                    val dx = event.x - lastTouchX
-                    val dy = event.y - lastTouchY
-
-                    translateX += dx
-                    translateY += dy
-
+                    translateX += event.x - lastTouchX
+                    translateY += event.y - lastTouchY
                     applyMapTransform()
                 }
 
                 lastTouchX = event.x
                 lastTouchY = event.y
-
                 return true
             }
 
@@ -355,7 +424,6 @@ class MainActivity : AppCompatActivity() {
         mapOverlay.scaleY = zoom
         mapOverlay.translationX = translateX
         mapOverlay.translationY = translateY
-
         mapOverlay.invalidate()
     }
 
@@ -366,17 +434,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateMapHint(message: String) {
         if (!::searchMapHint.isInitialized) return
-
         searchMapHint.text = message
-        searchMapHint.visibility =
-            if (message.isBlank()) View.GONE else View.VISIBLE
+        searchMapHint.visibility = if (message.isBlank()) View.GONE else View.VISIBLE
     }
 
     private fun getMapObjectList(objects: JSONObject): List<JSONObject> {
         val result = mutableListOf<JSONObject>()
-
-        val array = objects.optJSONArray("items")
-            ?: objects.optJSONArray("objects")
+        val array = objects.optJSONArray("items") ?: objects.optJSONArray("objects")
 
         if (array != null) {
             for (i in 0 until array.length()) {
@@ -387,8 +451,7 @@ class MainActivity : AppCompatActivity() {
             val keys = objects.keys()
 
             while (keys.hasNext()) {
-                val key = keys.next()
-                val obj = objects.optJSONObject(key) ?: continue
+                val obj = objects.optJSONObject(keys.next()) ?: continue
                 result.add(obj)
             }
         }
@@ -396,12 +459,81 @@ class MainActivity : AppCompatActivity() {
         return result
     }
 
+    private fun normalizeUnitValue(value: String): String {
+        return value.lowercase()
+            .replace("_", "")
+            .replace("-", "")
+            .replace(" ", "")
+    }
+
+    private fun getWtIconRes(iconName: String): Int = when (iconName) {
+        "LightTank" -> R.drawable.ic_light_tank
+        "MediumTank" -> R.drawable.ic_medium_tank
+        "HeavyTank" -> R.drawable.ic_heavy_tank
+        "TankDestroyer" -> R.drawable.ic_tank_destroyer
+        "SPAA" -> R.drawable.ic_spaa
+        "Fighter" -> R.drawable.ic_fighter
+        "Assault" -> R.drawable.ic_assault
+        "Bomber" -> R.drawable.ic_bomber
+        "Helicopter" -> R.drawable.ic_helicopter
+        "Ship", "TorpedoBoat" -> R.drawable.ic_boat
+        "Frigate", "Gunboat" -> R.drawable.ic_frigate
+        "Destroyer" -> R.drawable.ic_destroyer
+        "Cruiser", "LightCruiser", "HeavyCruiser" -> R.drawable.ic_cruiser
+        "Battleship", "Battlecruiser" -> R.drawable.ic_battleship
+        "Player" -> R.drawable.ic_player
+        "capture_zone" -> R.drawable.ic_capture_zone
+        "airfield" -> R.drawable.ic_airfield
+        else -> R.drawable.ic_light_tank
+    }
+
+    private fun isAirObject(type: String, icon: String, obj: JSONObject): Boolean {
+        val combined = normalizeUnitValue(
+            "$type $icon ${obj.optString("unit_class", "")} ${obj.optString("class", "")}"
+        )
+
+        return combined.contains("aircraft") ||
+                combined.contains("fighter") ||
+                combined.contains("bomber") ||
+                combined.contains("helicopter") ||
+                combined.contains("attacker") ||
+                combined.contains("interceptor") ||
+                combined.contains("assault")
+    }
+
+    private fun isShipObject(type: String, icon: String, obj: JSONObject): Boolean {
+        val combined = normalizeUnitValue(
+            "$type $icon ${obj.optString("unit_class", "")} ${obj.optString("class", "")}"
+        )
+
+        return combined.contains("ship") ||
+                combined.contains("destroyer") ||
+                combined.contains("cruiser") ||
+                combined.contains("battleship") ||
+                combined.contains("torpedoboat") ||
+                combined.contains("gunboat") ||
+                combined.contains("frigate")
+    }
+
+    private fun isGroundObject(type: String, icon: String, obj: JSONObject): Boolean {
+        val combined = normalizeUnitValue(
+            "$type $icon ${obj.optString("unit_class", "")} ${obj.optString("class", "")}"
+        )
+
+        return type == "ground_model" ||
+                type == "vehicle" ||
+                type.contains("ground") ||
+                combined.contains("tank") ||
+                combined.contains("spaa") ||
+                combined.contains("ifv")
+    }
+
     private fun isAirView(objects: List<JSONObject>): Boolean {
         return objects.any { obj ->
             val type = obj.optString("type", "").lowercase()
             val icon = obj.optString("icon", "").lowercase()
 
-            type == "aircraft" &&
+            isAirObject(type, icon, obj) &&
                     (icon == "player" || obj.optBoolean("is_player", false))
         }
     }
@@ -409,7 +541,6 @@ class MainActivity : AppCompatActivity() {
     private fun parseMapObjects(objects: JSONObject): MapData {
         val markers = mutableListOf<MapMarker>()
         val spawnPoints = mutableListOf<SpawnPoint>()
-
         val objectList = getMapObjectList(objects)
         val airView = isAirView(objectList)
 
@@ -426,7 +557,6 @@ class MainActivity : AppCompatActivity() {
 
         captureIndices.forEachIndexed { index, markerIndex ->
             val marker = markers[markerIndex]
-
             if (marker.label.isBlank()) {
                 markers[markerIndex] = marker.copy(
                     label = ('A'.code + index).toChar().toString()
@@ -454,7 +584,6 @@ class MainActivity : AppCompatActivity() {
     ) {
         val x = getFloat(obj, "x") ?: return
         val y = getFloat(obj, "y") ?: return
-
         if (x !in 0f..1f || y !in 0f..1f) return
 
         val type = obj.optString("type", "").lowercase()
@@ -471,11 +600,25 @@ class MainActivity : AppCompatActivity() {
 
         if (isSpawn) {
             spawnPoints.add(
-                SpawnPoint(
+                SpawnPoint(x, y, color, getSpawnType(type, icon, obj))
+            )
+            return
+        }
+
+        val isAirfield =
+            type.contains("airfield") ||
+                    icon.contains("airfield") ||
+                    obj.has("airfield")
+
+        if (isAirfield) {
+            markers.add(
+                MapMarker(
                     x = x,
                     y = y,
-                    color = color,
-                    type = getSpawnType(type, icon, obj)
+                    label = "",
+                    color = parseColorOrDefault(color, Color.WHITE),
+                    type = MarkerType.AIRFIELD,
+                    iconName = "airfield"
                 )
             )
             return
@@ -489,20 +632,14 @@ class MainActivity : AppCompatActivity() {
                     obj.has("capture_zone")
 
         if (isCapture) {
-            val captureColor = parseColorOrDefault(
-                color,
-                Color.rgb(180, 180, 180)
-            )
-
-            val label = getCaptureLabel(obj)
-
             markers.add(
                 MapMarker(
-                    x,
-                    y,
-                    label,
-                    captureColor,
-                    MarkerType.CAPTURE
+                    x = x,
+                    y = y,
+                    label = getCaptureLabel(obj),
+                    color = parseColorOrDefault(color, Color.rgb(180, 180, 180)),
+                    type = MarkerType.CAPTURE,
+                    iconName = "capture_zone"
                 )
             )
             return
@@ -513,58 +650,181 @@ class MainActivity : AppCompatActivity() {
                     type == "player" ||
                     obj.optBoolean("is_player", false)
 
-        if (isPlayer) {
-            val isAircraft = type == "aircraft"
+        val isAircraft = isAirObject(type, icon, obj)
+        val isShip = isShipObject(type, icon, obj)
+        val isGroundVehicle = isGroundObject(type, icon, obj)
 
+        if (!isPlayer && !isAircraft && !isShip && !isGroundVehicle) return
+
+        val unitIcon = if (isPlayer) "Player" else getUnitIcon(type, icon, obj)
+
+        val directionX = getFloat(obj, "dx") ?: 0f
+        val directionY = getFloat(obj, "dy") ?: -1f
+
+        if (isPlayer) {
             markers.add(
                 MapMarker(
                     x = x,
                     y = y,
                     label = "",
                     color = Color.WHITE,
-                    type = if (isAircraft) {
-                        MarkerType.PLAYER_AIRCRAFT
-                    } else {
-                        MarkerType.PLAYER
-                    },
-                    directionX = getFloat(obj, "dx") ?: 0f,
-                    directionY = getFloat(obj, "dy") ?: -1f
+                    type = MarkerType.PLAYER_UNIT,
+                    iconName = "Player",
+                    directionX = directionX,
+                    directionY = directionY
                 )
             )
             return
         }
 
-        val isAircraft = type == "aircraft"
-        val isGroundVehicle =
-            type == "ground_model" ||
-                    type == "ship" ||
-                    type == "vehicle"
+        if (!isFriendlyColor(color)) return
 
-        if (airView) {
-            if (isAircraft && isFriendlyColor(color)) {
-                markers.add(
-                    MapMarker(
-                        x = x,
-                        y = y,
-                        label = "",
-                        color = Color.rgb(25, 82, 255),
-                        type = MarkerType.AIRCRAFT_TEAMMATE,
-                        directionX = getFloat(obj, "dx") ?: 0f,
-                        directionY = getFloat(obj, "dy") ?: -1f
-                    )
+        val teamColor = getFriendlyTeamColor(color)
+
+        if (airView && isAircraft) {
+            markers.add(
+                MapMarker(
+                    x = x,
+                    y = y,
+                    label = "",
+                    color = teamColor,
+                    type = MarkerType.AIR_UNIT,
+                    iconName = unitIcon,
+                    directionX = directionX,
+                    directionY = directionY
                 )
-            }
-        } else {
-            if (isGroundVehicle && isFriendlyColor(color)) {
-                markers.add(
-                    MapMarker(
-                        x = x,
-                        y = y,
-                        label = "",
-                        color = Color.rgb(25, 82, 255),
-                        type = MarkerType.TEAMMATE
-                    )
+            )
+        } else if (!airView && (isGroundVehicle || isShip)) {
+            markers.add(
+                MapMarker(
+                    x = x,
+                    y = y,
+                    label = "",
+                    color = teamColor,
+                    type = MarkerType.GROUND_UNIT,
+                    iconName = unitIcon,
+                    directionX = directionX,
+                    directionY = directionY
                 )
+            )
+        }
+    }
+
+    private fun getUnitIcon(
+        type: String,
+        icon: String,
+        obj: JSONObject
+    ): String {
+        val normalizedIcon = normalizeUnitValue(icon)
+        val combined = normalizeUnitValue(
+            "$type $icon " +
+                    obj.optString("name", "") + " " +
+                    obj.optString("class", "") + " " +
+                    obj.optString("unit_class", "") + " " +
+                    obj.optString("vehicle", "") + " " +
+                    obj.optString("unit", "") + " " +
+                    obj.optString("model", "")
+        )
+
+        return when {
+            normalizedIcon.contains("heavytank") ||
+                    combined.contains("heavytank") -> "HeavyTank"
+
+            normalizedIcon.contains("lighttank") ||
+                    combined.contains("lighttank") -> "LightTank"
+
+            normalizedIcon.contains("mediumtank") ||
+                    combined.contains("mediumtank") -> "MediumTank"
+
+            normalizedIcon.contains("tankdestroyer") ||
+                    combined.contains("tankdestroyer") ||
+                    combined.contains("tankhunter") ||
+                    combined.contains("casemate") -> "TankDestroyer"
+
+            normalizedIcon.contains("spaa") ||
+                    combined.contains("spaa") ||
+                    combined.contains("antiaircraft") -> "SPAA"
+
+            normalizedIcon.contains("torpedobomber") ||
+                    combined.contains("torpedobomber") -> "Bomber"
+
+            normalizedIcon.contains("heavybomber") ||
+                    combined.contains("heavybomber") ||
+                    combined.contains("strategicbomber") ||
+                    normalizedIcon.contains("bomber") ||
+                    combined.contains("bomber") -> "Bomber"
+
+            normalizedIcon.contains("attacker") ||
+                    normalizedIcon.contains("assault") ||
+                    combined.contains("attacker") ||
+                    combined.contains("groundattack") ||
+                    combined.contains("assault") -> "Assault"
+
+            normalizedIcon.contains("fighter") ||
+                    combined.contains("fighter") ||
+                    combined.contains("interceptor") -> "Fighter"
+
+            normalizedIcon.contains("helicopter") ||
+                    combined.contains("helicopter") -> "Helicopter"
+
+            normalizedIcon.contains("battleship") ||
+                    normalizedIcon.contains("battlecruiser") ||
+                    combined.contains("battleship") ||
+                    combined.contains("battlecruiser") -> "Battleship"
+
+            normalizedIcon.contains("heavycruiser") ||
+                    combined.contains("heavycruiser") -> "HeavyCruiser"
+
+            normalizedIcon.contains("lightcruiser") ||
+                    normalizedIcon.contains("cruiser") ||
+                    combined.contains("lightcruiser") ||
+                    combined.contains("cruiser") -> "Cruiser"
+
+            normalizedIcon.contains("frigate") ||
+                    combined.contains("frigate") -> "Frigate"
+
+            normalizedIcon.contains("destroyer") ||
+                    combined.contains("destroyer") -> "Destroyer"
+
+            normalizedIcon.contains("torpedoboat") ||
+                    normalizedIcon.contains("torpedocraft") ||
+                    combined.contains("torpedoboat") ||
+                    combined.contains("torpedocraft") -> "TorpedoBoat"
+
+            normalizedIcon.contains("gunboat") ||
+                    normalizedIcon.contains("patrol") ||
+                    normalizedIcon.contains("motorboat") ||
+                    combined.contains("gunboat") ||
+                    combined.contains("patrol") ||
+                    combined.contains("motorboat") -> "Gunboat"
+
+            isShipObject(type, icon, obj) -> "Ship"
+            isAirObject(type, icon, obj) -> "Fighter"
+            else -> "LightTank"
+        }
+    }
+
+    private fun getFriendlyTeamColor(color: String): Int {
+        val normalized = normalizeColor(color)
+
+        return when (normalized) {
+            TEAM_BLUE -> Color.rgb(25, 82, 255)
+            SQUAD_GREEN -> Color.rgb(170, 255, 142)
+            else -> {
+                try {
+                    val parsed = Color.parseColor(normalized)
+                    val red = Color.red(parsed)
+                    val green = Color.green(parsed)
+                    val blue = Color.blue(parsed)
+
+                    if (green > red * 1.3f && green > blue * 0.8f) {
+                        Color.rgb(170, 255, 142)
+                    } else {
+                        Color.rgb(25, 82, 255)
+                    }
+                } catch (e: Exception) {
+                    Color.rgb(25, 82, 255)
+                }
             }
         }
     }
@@ -579,10 +839,7 @@ class MainActivity : AppCompatActivity() {
 
         for (value in possibleLabels) {
             val label = value.trim().uppercase()
-
-            if (label.matches(Regex("[A-Z]"))) {
-                return label
-            }
+            if (label.matches(Regex("[A-Z]"))) return label
         }
 
         return ""
@@ -593,7 +850,7 @@ class MainActivity : AppCompatActivity() {
         icon: String,
         obj: JSONObject
     ): String {
-        val combined = "$type $icon ${obj.toString()}".lowercase()
+        val combined = normalizeUnitValue("$type $icon $obj")
 
         return when {
             combined.contains("fighter") -> "FIGHTER"
@@ -608,16 +865,13 @@ class MainActivity : AppCompatActivity() {
             if (!obj.has(key) || obj.isNull(key)) continue
 
             val value = obj.opt(key)
-
             val number = when (value) {
                 is Number -> value.toFloat()
                 is String -> value.toFloatOrNull()
                 else -> null
             }
 
-            if (number != null && number.isFinite()) {
-                return number
-            }
+            if (number != null && number.isFinite()) return number
         }
 
         return null
@@ -631,30 +885,23 @@ class MainActivity : AppCompatActivity() {
 
         return when (value) {
             is String -> normalizeColor(value)
-
             is JSONArray -> {
                 if (value.length() >= 3) {
                     val r = value.optInt(0).coerceIn(0, 255)
                     val g = value.optInt(1).coerceIn(0, 255)
                     val b = value.optInt(2).coerceIn(0, 255)
-
                     String.format("#%02X%02X%02X", r, g, b)
                 } else {
                     ""
                 }
             }
-
             else -> ""
         }
     }
 
     private fun normalizeColor(color: String): String {
         var result = color.trim().uppercase()
-
-        if (!result.startsWith("#")) {
-            result = "#$result"
-        }
-
+        if (!result.startsWith("#")) result = "#$result"
         return result
     }
 
@@ -670,7 +917,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun isFriendlyColor(color: String): Boolean {
         if (color.isBlank()) return false
-
         val normalized = normalizeColor(color)
 
         if (normalized in FRIENDLY_COLORS) return true
@@ -697,7 +943,6 @@ class MainActivity : AppCompatActivity() {
         while (remaining.isNotEmpty()) {
             val cluster = mutableListOf<SpawnPoint>()
             val queue = ArrayDeque<SpawnPoint>()
-
             queue.add(remaining.removeAt(0))
 
             while (queue.isNotEmpty()) {
@@ -726,12 +971,7 @@ class MainActivity : AppCompatActivity() {
         return sectors
     }
 
-    private fun distance(
-        x1: Float,
-        y1: Float,
-        x2: Float,
-        y2: Float
-    ): Float {
+    private fun distance(x1: Float, y1: Float, x2: Float, y2: Float): Float {
         return hypot(x2 - x1, y2 - y1)
     }
 
@@ -754,6 +994,7 @@ class MainActivity : AppCompatActivity() {
         val label: String,
         val color: Int,
         val type: MarkerType,
+        val iconName: String = "LightTank",
         val directionX: Float = 0f,
         val directionY: Float = -1f
     )
@@ -773,10 +1014,10 @@ class MainActivity : AppCompatActivity() {
 
     enum class MarkerType {
         CAPTURE,
-        TEAMMATE,
-        AIRCRAFT_TEAMMATE,
-        PLAYER,
-        PLAYER_AIRCRAFT
+        AIRFIELD,
+        GROUND_UNIT,
+        AIR_UNIT,
+        PLAYER_UNIT
     }
 
     private inner class MapOverlayView : View(this@MainActivity) {
@@ -784,14 +1025,12 @@ class MainActivity : AppCompatActivity() {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val imageRect = RectF()
         private val bitmapRect = RectF()
+        private val drawableCache = mutableMapOf<Int, Drawable?>()
 
         private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
             textAlign = Paint.Align.CENTER
-            typeface = Typeface.create(
-                "sans-serif-condensed",
-                Typeface.BOLD
-            )
+            typeface = Typeface.create("sans-serif-condensed", Typeface.BOLD)
         }
 
         private val textBackgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -799,31 +1038,7 @@ class MainActivity : AppCompatActivity() {
             style = Paint.Style.FILL
         }
 
-        private val aircraftPath = Path().apply {
-            moveTo(0f, -9f)
-            lineTo(1.8f, -2.5f)
-            lineTo(7f, 2f)
-            lineTo(7f, 3.5f)
-            lineTo(1.5f, 2f)
-            lineTo(1.5f, 6f)
-            lineTo(3f, 7.5f)
-            lineTo(3f, 8.5f)
-            lineTo(0f, 7.5f)
-            lineTo(-3f, 8.5f)
-            lineTo(-3f, 7.5f)
-            lineTo(-1.5f, 6f)
-            lineTo(-1.5f, 2f)
-            lineTo(-7f, 3.5f)
-            lineTo(-7f, 2f)
-            lineTo(-1.8f, -2.5f)
-            close()
-        }
-
-        private var mapData = MapData(
-            emptyList(),
-            emptyList(),
-            false
-        )
+        private var mapData = MapData(emptyList(), emptyList(), false)
 
         fun setMapData(data: MapData) {
             mapData = data
@@ -836,13 +1051,7 @@ class MainActivity : AppCompatActivity() {
             val bitmap = currentBitmap ?: return
             if (image.drawable == null) return
 
-            bitmapRect.set(
-                0f,
-                0f,
-                bitmap.width.toFloat(),
-                bitmap.height.toFloat()
-            )
-
+            bitmapRect.set(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
             imageRect.set(bitmapRect)
             image.imageMatrix.mapRect(imageRect)
 
@@ -851,10 +1060,7 @@ class MainActivity : AppCompatActivity() {
                 image.top.toFloat() + image.paddingTop
             )
 
-            if (
-                imageRect.width() <= 0f ||
-                imageRect.height() <= 0f
-            ) return
+            if (imageRect.width() <= 0f || imageRect.height() <= 0f) return
 
             drawSpawnSectors(canvas, imageRect)
             drawMarkers(canvas, imageRect)
@@ -870,7 +1076,6 @@ class MainActivity : AppCompatActivity() {
                 )
 
                 val hull = convexHull(sector.points)
-
                 if (hull.isEmpty()) continue
 
                 var centerX = 0f
@@ -887,7 +1092,6 @@ class MainActivity : AppCompatActivity() {
                 when {
                     hull.size >= 3 -> {
                         val path = Path()
-
                         path.moveTo(
                             mapRect.left + hull[0].x * mapRect.width(),
                             mapRect.top + hull[0].y * mapRect.height()
@@ -954,14 +1158,11 @@ class MainActivity : AppCompatActivity() {
                         mapRect.top + hull.maxOf { it.y } * mapRect.height()
                     )
 
-                    val labelX = mapRect.left + centerX * mapRect.width()
-                    val labelY = mapRect.top + centerY * mapRect.height()
-
                     drawFitLabel(
                         canvas,
                         sector.type,
-                        labelX,
-                        labelY,
+                        mapRect.left + centerX * mapRect.width(),
+                        mapRect.top + centerY * mapRect.height(),
                         color,
                         bounds,
                         10f * density
@@ -975,24 +1176,13 @@ class MainActivity : AppCompatActivity() {
         private fun drawMarkers(canvas: Canvas, mapRect: RectF) {
             val density = resources.displayMetrics.density
 
-            val captureRadius = 7f * density
-            val teammateWidth = 5f * density
-            val teammateHeight = 3f * density
-            val playerWidth = 7f * density
-            val playerHeight = 4f * density
-            val outlineWidth = 0.7f * density
-
             for (marker in mapData.markers) {
                 val x = mapRect.left + marker.x * mapRect.width()
                 val y = mapRect.top + marker.y * mapRect.height()
 
                 when (marker.type) {
                     MarkerType.CAPTURE -> {
-                        paint.style = Paint.Style.STROKE
-                        paint.strokeWidth = 1f * density
-                        paint.color = marker.color
-                        paint.alpha = 190
-                        canvas.drawCircle(x, y, captureRadius, paint)
+                        drawUnitIcon(canvas, x, y, marker, density)
 
                         if (marker.label.isNotBlank()) {
                             textPaint.color = Color.BLACK
@@ -1009,99 +1199,111 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    MarkerType.TEAMMATE -> {
+                    MarkerType.AIRFIELD -> {
+                        drawUnitIcon(canvas, x, y, marker, density)
+                    }
+
+                    MarkerType.GROUND_UNIT -> {
                         if (!mapData.isAirView) {
-                            drawRectangleMarker(
-                                canvas,
-                                x,
-                                y,
-                                teammateWidth,
-                                teammateHeight,
-                                marker.color,
-                                outlineWidth
-                            )
+                            drawUnitIcon(canvas, x, y, marker, density)
                         }
                     }
 
-                    MarkerType.PLAYER -> {
-                        if (!mapData.isAirView) {
-                            drawRectangleMarker(
-                                canvas,
-                                x,
-                                y,
-                                playerWidth,
-                                playerHeight,
-                                Color.WHITE,
-                                outlineWidth
-                            )
-                        }
+                    MarkerType.PLAYER_UNIT -> {
+                        drawUnitIcon(canvas, x, y, marker, density)
                     }
 
-                    MarkerType.AIRCRAFT_TEAMMATE -> {
+                    MarkerType.AIR_UNIT -> {
                         if (mapData.isAirView) {
-                            drawAircraftMarker(
-                                canvas,
-                                x,
-                                y,
-                                marker.directionX,
-                                marker.directionY,
-                                marker.color,
-                                density
-                            )
-                        }
-                    }
-
-                    MarkerType.PLAYER_AIRCRAFT -> {
-                        if (mapData.isAirView) {
-                            drawAircraftMarker(
-                                canvas,
-                                x,
-                                y,
-                                marker.directionX,
-                                marker.directionY,
-                                Color.WHITE,
-                                density
-                            )
+                            drawUnitIcon(canvas, x, y, marker, density)
                         }
                     }
                 }
             }
         }
 
-        private fun drawAircraftMarker(
+        private fun drawUnitIcon(
             canvas: Canvas,
             x: Float,
             y: Float,
-            directionX: Float,
-            directionY: Float,
-            color: Int,
+            marker: MapMarker,
             density: Float
         ) {
+            val resourceId = getWtIconRes(marker.iconName)
+
+            val drawable = drawableCache.getOrPut(resourceId) {
+                try {
+                    getDrawable(resourceId)?.mutate()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Cannot load drawable: ${marker.iconName}", e)
+                    null
+                }
+            } ?: return
+
+            val isPlayer = marker.type == MarkerType.PLAYER_UNIT
+
+            val size = when (marker.iconName) {
+                "capture_zone" -> 19f
+                "airfield" -> 23f
+                "Battleship", "Battlecruiser" -> if (isPlayer) 10f else 9f
+                "Bomber" -> if (isPlayer) 9f else 8f
+                "Player" -> 7.3f
+                else -> if (isPlayer) 7.3f else 6.3f
+            } * density
+
+            val width = size * when (marker.iconName) {
+                "Ship", "TorpedoBoat", "Frigate", "Gunboat",
+                "Destroyer", "Cruiser", "LightCruiser", "HeavyCruiser",
+                "Battleship", "Battlecruiser" -> 0.72f
+                else -> 0.78f
+            }
+
+            val height = size
+
+            val directionLength = hypot(marker.directionX, marker.directionY)
+            val directionX = if (directionLength > 0.001f) marker.directionX else 0f
+            val directionY = if (directionLength > 0.001f) marker.directionY else -1f
+
             val angle = Math.toDegrees(
-                atan2(
-                    directionY.toDouble(),
-                    directionX.toDouble()
-                )
+                atan2(directionY.toDouble(), directionX.toDouble())
             ).toFloat() + 90f
 
-            val scale = 1.15f * density
+            val left = -width / 2f
+            val top = -height / 2f
+            val right = width / 2f
+            val bottom = height / 2f
+            val outline = 0.7f * density
 
             canvas.save()
             canvas.translate(x, y)
-            canvas.rotate(angle)
-            canvas.scale(scale, scale)
 
-            paint.style = Paint.Style.FILL
-            paint.color = color
-            paint.alpha = 255
-            canvas.drawPath(aircraftPath, paint)
+            if (
+                marker.type == MarkerType.GROUND_UNIT ||
+                marker.type == MarkerType.AIR_UNIT ||
+                marker.type == MarkerType.PLAYER_UNIT
+            ) {
+                canvas.rotate(angle)
+            }
 
-            paint.style = Paint.Style.STROKE
-            paint.color = Color.BLACK
-            paint.strokeWidth = 1.1f
-            paint.strokeJoin = Paint.Join.ROUND
-            paint.alpha = 255
-            canvas.drawPath(aircraftPath, paint)
+            drawable.setBounds(
+                (left - outline).toInt(),
+                (top - outline).toInt(),
+                (right + outline).toInt(),
+                (bottom + outline).toInt()
+            )
+            drawable.setTint(Color.BLACK)
+            drawable.alpha = 255
+            drawable.draw(canvas)
+
+            drawable.setBounds(
+                left.toInt(),
+                top.toInt(),
+                right.toInt(),
+                bottom.toInt()
+            )
+            drawable.setTint(marker.color)
+            drawable.alpha = 255
+            drawable.draw(canvas)
 
             canvas.restore()
         }
@@ -1120,7 +1322,6 @@ class MainActivity : AppCompatActivity() {
             val density = resources.displayMetrics.density
             val horizontalPadding = 3f * density
             val verticalPadding = 2f * density
-
             val availableWidth = bounds.width() - horizontalPadding * 2f
             val availableHeight = bounds.height() - verticalPadding * 2f
 
@@ -1146,7 +1347,6 @@ class MainActivity : AppCompatActivity() {
             val metrics = textPaint.fontMetrics
             val baseline = y - (metrics.ascent + metrics.descent) / 2f
             val textWidth = textPaint.measureText(text)
-
             val paddingX = minOf(horizontalPadding, availableWidth * 0.08f)
             val paddingY = minOf(verticalPadding, availableHeight * 0.08f)
 
@@ -1175,89 +1375,11 @@ class MainActivity : AppCompatActivity() {
             textPaint.strokeWidth = 1.5f * density * scale
             textPaint.strokeJoin = Paint.Join.ROUND
             textPaint.color = Color.BLACK
-
             canvas.drawText(text, x, baseline, textPaint)
 
             textPaint.style = Paint.Style.FILL
             textPaint.color = Color.WHITE
-
             canvas.drawText(text, x, baseline, textPaint)
-        }
-
-        private fun drawLabel(
-            canvas: Canvas,
-            text: String,
-            x: Float,
-            y: Float,
-            color: Int,
-            textSize: Float
-        ) {
-            if (text.isBlank()) return
-
-            val density = resources.displayMetrics.density
-
-            textPaint.textSize = textSize
-            textPaint.textAlign = Paint.Align.CENTER
-            textPaint.style = Paint.Style.FILL
-            textPaint.color = Color.WHITE
-
-            val metrics = textPaint.fontMetrics
-            val textWidth = textPaint.measureText(text)
-            val padding = 3f * density
-
-            val background = RectF(
-                x - textWidth / 2f - padding,
-                y + metrics.ascent - padding,
-                x + textWidth / 2f + padding,
-                y + metrics.descent + padding
-            )
-
-            canvas.drawRoundRect(
-                background,
-                3f * density,
-                3f * density,
-                textBackgroundPaint
-            )
-
-            textPaint.style = Paint.Style.STROKE
-            textPaint.strokeWidth = 2f * density
-            textPaint.strokeJoin = Paint.Join.ROUND
-            textPaint.color = Color.BLACK
-
-            canvas.drawText(text, x, y, textPaint)
-
-            textPaint.style = Paint.Style.FILL
-            textPaint.color = Color.WHITE
-
-            canvas.drawText(text, x, y, textPaint)
-        }
-
-        private fun drawRectangleMarker(
-            canvas: Canvas,
-            x: Float,
-            y: Float,
-            width: Float,
-            height: Float,
-            color: Int,
-            outlineWidth: Float
-        ) {
-            val rect = RectF(
-                x - width / 2f,
-                y - height / 2f,
-                x + width / 2f,
-                y + height / 2f
-            )
-
-            paint.style = Paint.Style.FILL
-            paint.color = color
-            paint.alpha = 255
-            canvas.drawRect(rect, paint)
-
-            paint.style = Paint.Style.STROKE
-            paint.color = Color.BLACK
-            paint.strokeWidth = outlineWidth
-            paint.alpha = 255
-            canvas.drawRect(rect, paint)
         }
 
         private fun convexHull(points: List<SpawnPoint>): List<PointF> {
@@ -1282,7 +1404,6 @@ class MainActivity : AppCompatActivity() {
                 ) {
                     lower.removeAt(lower.lastIndex)
                 }
-
                 lower.add(point)
             }
 
@@ -1295,13 +1416,11 @@ class MainActivity : AppCompatActivity() {
                 ) {
                     upper.removeAt(upper.lastIndex)
                 }
-
                 upper.add(point)
             }
 
             lower.removeAt(lower.lastIndex)
             upper.removeAt(upper.lastIndex)
-
             return lower + upper
         }
     }
