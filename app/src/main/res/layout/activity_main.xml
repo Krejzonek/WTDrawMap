@@ -126,8 +126,9 @@
             android:layout_marginStart="12dp"
             android:layout_marginTop="12dp"
             android:layout_marginEnd="12dp"
-            android:layout_marginBottom="12dp"
+            android:layout_marginBottom="4dp"
             android:background="#080D14"
+            android:clipChildren="true"
             android:clipToPadding="true">
 
             <ImageView
@@ -184,6 +185,32 @@
                 android:textStyle="bold" />
 
         </FrameLayout>
+
+        <!-- Vehicle legend -->
+        <HorizontalScrollView
+            android:id="@+id/MapLegendScroll"
+            android:layout_width="match_parent"
+            android:layout_height="42dp"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="12dp"
+            android:layout_marginBottom="8dp"
+            android:background="#111A27"
+            android:scrollbars="none"
+            android:fillViewport="false"
+            android:clipChildren="true"
+            android:clipToPadding="true"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/MapLegend"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp" />
+
+        </HorizontalScrollView>
 
     </LinearLayout>
 
