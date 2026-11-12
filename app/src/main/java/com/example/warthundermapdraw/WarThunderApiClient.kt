@@ -8,12 +8,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.URL
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 
 class WarThunderApiClient(private val context: Context) {
 
@@ -48,6 +49,11 @@ class WarThunderApiClient(private val context: Context) {
     @Volatile
     private var cachedImageKey = ""
 
+    data class ServerDevice(
+        val name: String,
+        val address: String
+    )
+
     data class MapData(
         val address: String,
         val info: JSONObject,
@@ -61,7 +67,7 @@ class WarThunderApiClient(private val context: Context) {
         val broadcastAddress: Long
     )
 
-    fun discover(onResult: (String?) -> Unit) {
+    fun discover(onResult: (List<ServerDevice>) -> Unit) {
         if (!discoveryRunning.compareAndSet(false, true)) return
 
         executor.execute {
@@ -70,57 +76,52 @@ class WarThunderApiClient(private val context: Context) {
 
                 if (localNetwork == null) {
                     Log.w(TAG, "Wi-Fi network not available")
-                    onResult(null)
+                    onResult(emptyList())
                     return@execute
                 }
 
-                val found = AtomicReference<String?>(null)
-                val tasks = mutableListOf<java.util.concurrent.Future<*>>()
                 val addresses = mutableListOf<Long>()
-
                 var current = localNetwork.networkAddress + 1
+                val ownAddress = ipToLong(localNetwork.address)
 
                 while (
                     current < localNetwork.broadcastAddress &&
                     addresses.size < MAX_SCAN_ADDRESSES
                 ) {
-                    if (current != ipToLong(localNetwork.address)) {
+                    if (current != ownAddress) {
                         addresses.add(current)
                     }
-
                     current++
                 }
 
                 if (addresses.isEmpty()) {
-                    onResult(null)
+                    onResult(emptyList())
                     return@execute
                 }
 
+                val found = ConcurrentLinkedQueue<ServerDevice>()
                 val scanLatch = CountDownLatch(addresses.size)
+                val tasks = mutableListOf<java.util.concurrent.Future<*>>()
 
                 for (ip in addresses) {
-                    if (found.get() != null) {
-                        scanLatch.countDown()
-                        continue
-                    }
-
                     val task = scanExecutor.submit {
                         try {
-                            if (found.get() != null) return@submit
-
-                            val candidate = "http://${longToIp(ip)}:$PORT"
-                            val response = request(
-                                "$candidate/map_info.json",
-                                700
-                            )
+                            val ipAddress = longToIp(ip)
+                            val candidate = "http://$ipAddress:$PORT"
+                            val response = request("$candidate/map_info.json", 700)
 
                             if (response != null) {
                                 val json = JSONObject(response)
 
                                 if (json.has("valid")) {
-                                    if (found.compareAndSet(null, candidate)) {
-                                        Log.i(TAG, "War Thunder found: $candidate")
-                                    }
+                                    val deviceName = getDeviceName(ipAddress)
+                                    found.add(
+                                        ServerDevice(
+                                            name = deviceName,
+                                            address = candidate
+                                        )
+                                    )
+                                    Log.i(TAG, "War Thunder found: $deviceName ($candidate)")
                                 }
                             }
                         } catch (e: Exception) {
@@ -144,24 +145,48 @@ class WarThunderApiClient(private val context: Context) {
                     }
                 }
 
-                val result = found.get()
-
-                if (result != null) {
-                    serverAddress = result
-                    connectionErrors = 0
-                    cachedObjects = JSONObject()
-                    cachedImage = null
-                    cachedImageKey = ""
-                }
+                val result = found
+                    .distinctBy { it.address }
+                    .sortedBy { it.name.lowercase() }
 
                 onResult(result)
             } catch (e: Exception) {
                 Log.e(TAG, "Discovery error", e)
-                onResult(null)
+                onResult(emptyList())
             } finally {
                 discoveryRunning.set(false)
             }
         }
+    }
+
+    private fun getDeviceName(ip: String): String {
+        return try {
+            val hostName = InetAddress.getByName(ip).canonicalHostName
+                .trim()
+                .removeSuffix(".")
+
+            if (
+                hostName.isNotBlank() &&
+                !hostName.equals(ip, ignoreCase = true)
+            ) {
+                hostName
+            } else {
+                ip
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "Cannot resolve device name for $ip", e)
+            ip
+        }
+    }
+
+    fun selectServer(address: String) {
+        serverAddress = address
+        connectionErrors = 0
+        cachedObjects = JSONObject()
+        cachedImage = null
+        cachedImageKey = ""
+
+        Log.i(TAG, "Selected server: $address")
     }
 
     fun loadMap(onResult: (MapData?) -> Unit) {
@@ -271,13 +296,7 @@ class WarThunderApiClient(private val context: Context) {
         return if (trimmed.startsWith("[")) {
             JSONObject().put("items", JSONArray(trimmed))
         } else {
-            val json = JSONObject(trimmed)
-
-            if (json.has("items") || json.has("objects")) {
-                json
-            } else {
-                json
-            }
+            JSONObject(trimmed)
         }
     }
 
@@ -309,6 +328,11 @@ class WarThunderApiClient(private val context: Context) {
         cachedImage = null
         cachedImageKey = ""
 
+        Log.i(TAG, "Disconnected")
+    }
+
+    fun shutdown() {
+        disconnect()
         executor.shutdownNow()
         scanExecutor.shutdownNow()
     }
