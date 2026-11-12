@@ -21,6 +21,7 @@ import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -55,6 +56,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mapContainer: FrameLayout
     private lateinit var mapLegend: LinearLayout
     private lateinit var mapLegendScroll: HorizontalScrollView
+    private lateinit var changeDeviceButton: TextView
     private lateinit var apiClient: WarThunderApiClient
     private lateinit var scaleDetector: ScaleGestureDetector
 
@@ -66,6 +68,9 @@ class MainActivity : AppCompatActivity() {
 
     @Volatile
     private var isLoading = false
+
+    private var deviceSelectionDialog: AlertDialog? = null
+    private var deviceSelectionDialogShowing = false
 
     private var hasLoadedImage = false
     private var lastGeneration = -1
@@ -108,6 +113,11 @@ class MainActivity : AppCompatActivity() {
         searchMapHint = findViewById(R.id.SearchMapHint)
         mapLegend = findViewById(R.id.MapLegend)
         mapLegendScroll = findViewById(R.id.MapLegendScroll)
+        changeDeviceButton = findViewById(R.id.ChangeDeviceButton)
+
+        changeDeviceButton.setOnClickListener {
+            changeDevice()
+        }
 
         mapContainer = image.parent as? FrameLayout
             ?: throw IllegalStateException("Map ImageView must be inside a FrameLayout")
@@ -182,21 +192,147 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun discoverServer() {
-        if (isDiscovering) return
-        isDiscovering = true
+        if (isDiscovering) {
+            Log.d(TAG, "Discovery already running")
+            return
+        }
 
-        apiClient.discover { address ->
+        if (deviceSelectionDialogShowing) {
+            Log.d(TAG, "Device selection dialog already showing")
+            return
+        }
+
+        isDiscovering = true
+        Log.d(TAG, "Starting device discovery")
+
+        apiClient.discover { devices ->
             runOnUiThread {
                 isDiscovering = false
 
-                if (address != null) {
-                    Log.i(TAG, "Server found: $address")
-                    updateStatus("Connected: $address")
-                } else {
+                if (isFinishing || isDestroyed) {
+                    Log.w(TAG, "Activity is finishing")
+                    return@runOnUiThread
+                }
+
+                Log.i(TAG, "Discovery finished. Devices found: ${devices.size}")
+
+                devices.forEach {
+                    Log.i(TAG, "Found device: ${it.name} - ${it.address}")
+                }
+
+                if (devices.isEmpty()) {
                     updateStatus("Searching for War Thunder...")
+                } else {
+                    showDeviceSelectionDialog(devices)
                 }
             }
         }
+    }
+
+    private fun showDeviceSelectionDialog(
+        devices: List<WarThunderApiClient.ServerDevice>
+    ) {
+        if (isFinishing || isDestroyed || devices.isEmpty()) return
+
+        deviceSelectionDialog?.dismiss()
+        deviceSelectionDialogShowing = true
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 8, 24, 8)
+        }
+
+        devices.forEachIndexed { index, device ->
+            Log.i(TAG, "Dialog device $index: name='${device.name}', address='${device.address}'")
+
+            val button = TextView(this).apply {
+                text = "${device.name}\n${device.address}"
+                textSize = 16f
+                setTextColor(Color.WHITE)
+                setPadding(16, 16, 16, 16)
+                setBackgroundResource(android.R.drawable.list_selector_background)
+                isClickable = true
+                isFocusable = true
+
+                setOnClickListener {
+                    apiClient.selectServer(device.address)
+                    deviceSelectionDialog?.dismiss()
+                    clearMap()
+                    updateStatus("Connected: ${device.name}")
+                    updateMapHint("Waiting for a battle...")
+                }
+            }
+
+            layout.addView(
+                button,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+
+            if (index < devices.lastIndex) {
+                val divider = View(this).apply {
+                    setBackgroundColor(Color.DKGRAY)
+                }
+
+                layout.addView(
+                    divider,
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        1
+                    )
+                )
+            }
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Select War Thunder device")
+            .setView(layout)
+            .setCancelable(false)
+            .setNegativeButton("CANCEL", null)
+            .create()
+
+        dialog.setOnDismissListener {
+            deviceSelectionDialogShowing = false
+            deviceSelectionDialog = null
+        }
+
+        deviceSelectionDialog = dialog
+        dialog.show()
+    }
+
+    private fun changeDevice() {
+        deviceSelectionDialog?.dismiss()
+        deviceSelectionDialog = null
+        deviceSelectionDialogShowing = false
+
+        apiClient.disconnect()
+
+        isLoading = false
+        isDiscovering = false
+
+        clearMap()
+
+        updateStatus("Searching for War Thunder...")
+        updateMapHint("Searching for War Thunder...")
+
+        discoverServer()
+    }
+
+    private fun clearMap() {
+        currentBitmap = null
+        hasLoadedImage = false
+        lastGeneration = -1
+        lastHudType = -1
+
+        image.setImageDrawable(null)
+
+        currentMapData = MapData(emptyList(), emptyList(), false)
+        mapOverlay.setMapData(currentMapData)
+        updateLegend(currentMapData)
+
+        resetMapTransform()
     }
 
     private fun loadMap() {
@@ -206,6 +342,12 @@ class MainActivity : AppCompatActivity() {
         apiClient.loadMap { data ->
             runOnUiThread {
                 isLoading = false
+
+                if (isFinishing || isDestroyed) return@runOnUiThread
+
+                if (data != null && data.address != apiClient.getServerAddress()) {
+                    return@runOnUiThread
+                }
 
                 if (data == null) {
                     if (apiClient.getServerAddress() == null) {
@@ -221,7 +363,7 @@ class MainActivity : AppCompatActivity() {
                     mapOverlay.setMapData(currentMapData)
                     updateLegend(currentMapData)
                     updateMapHint("Waiting for a battle...")
-                    updateStatus("Connected: ${data.address}")
+                    updateStatus("Connected: ${getSelectedDeviceName(data.address)}")
                     return@runOnUiThread
                 }
 
@@ -264,9 +406,13 @@ class MainActivity : AppCompatActivity() {
                 currentMapData = parseMapObjects(data.objects)
                 mapOverlay.setMapData(currentMapData)
                 updateLegend(currentMapData)
-                updateStatus("Connected: ${data.address}")
+                updateStatus("Connected: ${getSelectedDeviceName(data.address)}")
             }
         }
+    }
+
+    private fun getSelectedDeviceName(address: String): String {
+        return address.removePrefix("http://").substringBefore(":")
     }
 
     private fun updateLegend(data: MapData) {
@@ -976,9 +1122,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        deviceSelectionDialog?.dismiss()
         updateTask?.cancel(true)
         scheduler.shutdownNow()
-        apiClient.disconnect()
+        apiClient.shutdown()
         super.onDestroy()
     }
 

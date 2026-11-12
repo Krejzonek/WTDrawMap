@@ -14,7 +14,6 @@
         android:orientation="vertical"
         android:background="#0B1018">
 
-        <!-- Top bar -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="64dp"
@@ -63,9 +62,25 @@
 
             </LinearLayout>
 
+            <TextView
+                android:id="@+id/ChangeDeviceButton"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:gravity="center"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:background="?attr/selectableItemBackground"
+                android:text="CHANGE"
+                android:textColor="#72B7F5"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.08"
+                android:contentDescription="Change War Thunder device" />
+
             <View
                 android:layout_width="1dp"
                 android:layout_height="30dp"
+                android:layout_marginStart="8dp"
                 android:background="#29394C" />
 
             <TextView
@@ -86,7 +101,6 @@
 
         </LinearLayout>
 
-        <!-- Connection status -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="48dp"
@@ -117,7 +131,6 @@
 
         </LinearLayout>
 
-        <!-- Map section -->
         <FrameLayout
             android:id="@+id/MapContainer"
             android:layout_width="match_parent"
@@ -152,7 +165,6 @@
                 android:textStyle="bold"
                 android:letterSpacing="0.08" />
 
-            <!-- Map corner labels -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -186,7 +198,6 @@
 
         </FrameLayout>
 
-        <!-- Vehicle legend -->
         <HorizontalScrollView
             android:id="@+id/MapLegendScroll"
             android:layout_width="match_parent"
@@ -214,7 +225,7 @@
 
     </LinearLayout>
 
-    <!-- Menu background -->
+
     <View
         android:id="@+id/MenuOverlay"
         android:layout_width="match_parent"
@@ -222,7 +233,7 @@
         android:background="#B8000000"
         android:visibility="gone" />
 
-    <!-- Side menu -->
+
     <LinearLayout
         android:id="@+id/SideMenu"
         android:layout_width="280dp"
