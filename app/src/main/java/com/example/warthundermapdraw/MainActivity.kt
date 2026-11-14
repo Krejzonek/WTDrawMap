@@ -1,10 +1,13 @@
 package com.example.warthundermapdraw
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -12,6 +15,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -22,6 +26,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import org.json.JSONObject
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
@@ -30,9 +35,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "WarThunderScanner"
-
         private const val UPDATE_INTERVAL = 200L
-
         private const val MIN_ZOOM = 1f
         private const val MAX_ZOOM = 5f
     }
@@ -40,25 +43,33 @@ class MainActivity : AppCompatActivity() {
     private lateinit var image: ImageView
     private lateinit var status: TextView
     private lateinit var searchMapHint: TextView
-
     private lateinit var mapContainer: FrameLayout
+
     private lateinit var mapLegend: LinearLayout
     private lateinit var mapLegendScroll: android.widget.HorizontalScrollView
 
-    private lateinit var changeDeviceButton: TextView
+    private lateinit var drawingLegend: LinearLayout
+    private lateinit var drawingLegendScroll: android.widget.HorizontalScrollView
 
-    private lateinit var apiClient: WarThunderApiClient
+    private lateinit var changeDeviceButton: TextView
+    private lateinit var sessionCodeView: TextView
+
+    private var activeSessionCode = ""
+
+    private var apiClient: WarThunderApiClient? = null
     private lateinit var scaleDetector: ScaleGestureDetector
 
     private lateinit var drawingManager: MapDrawingManager
     private lateinit var mapOverlay: MapOverlayView
     private lateinit var drawingToolbar: MapDrawingToolbar
 
-    private var currentBitmap: Bitmap? = null
+    private lateinit var multiplayer: MultiplayerSessionManager
 
+    private var currentBitmap: Bitmap? = null
     private var hasLoadedImage = false
     private var lastGeneration = -1
     private var lastHudType = -1
+    private var lastSentMapKey = ""
 
     private var currentMapData = MapData(
         emptyList(),
@@ -69,13 +80,11 @@ class MainActivity : AppCompatActivity() {
     private var zoom = 1f
     private var translateX = 0f
     private var translateY = 0f
-
     private var lastTouchX = 0f
     private var lastTouchY = 0f
     private var isDragging = false
 
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
-
     private var updateTask: ScheduledFuture<*>? = null
 
     @Volatile
@@ -86,6 +95,18 @@ class MainActivity : AppCompatActivity() {
 
     private var deviceSelectionDialog: AlertDialog? = null
     private var deviceSelectionDialogShowing = false
+
+    private val isHost by lazy {
+        intent.getBooleanExtra("SESSION_HOST", true)
+    }
+
+    private val username by lazy {
+        intent.getStringExtra("USERNAME") ?: "User"
+    }
+
+    private val sessionCode by lazy {
+        intent.getStringExtra("SESSION_CODE") ?: ""
+    }
 
     private val createPngDocument =
         registerForActivityResult(
@@ -99,24 +120,18 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        WindowCompat.setDecorFitsSystemWindows(
-            window,
-            false
-        )
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
         WindowInsetsControllerCompat(
             window,
             window.decorView
-        ).let {
-            it.systemBarsBehavior =
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
+        ).systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
 
         setContentView(R.layout.activity_main)
 
         findViewById<View>(android.R.id.content)
             .setOnApplyWindowInsetsListener { view, insets ->
-
                 val systemBars = insets.getInsets(
                     WindowInsetsCompat.Type.systemBars()
                 )
@@ -135,12 +150,18 @@ class MainActivity : AppCompatActivity() {
         initializeMap()
         initializeDrawing()
         initializeGestures()
-        initializeApi()
 
-        updateStatus("Searching for War Thunder...")
-        updateMapHint("Waiting for War Thunder...")
+        if (isHost) {
+            initializeApi()
+            changeDeviceButton.visibility = View.VISIBLE
+        } else {
+            changeDeviceButton.visibility = View.GONE
+        }
 
-        startSearching()
+        updateStatus("Connecting to multiplayer...")
+        updateMapHint("Connecting...")
+
+        initializeMultiplayer()
     }
 
     private fun initializeViews() {
@@ -151,8 +172,31 @@ class MainActivity : AppCompatActivity() {
         mapLegend = findViewById(R.id.MapLegend)
         mapLegendScroll = findViewById(R.id.MapLegendScroll)
 
-        changeDeviceButton =
-            findViewById(R.id.ChangeDeviceButton)
+        drawingLegend = findViewById(R.id.DrawingLegend)
+        drawingLegendScroll = findViewById(R.id.DrawingLegendScroll)
+
+        changeDeviceButton = findViewById(R.id.ChangeDeviceButton)
+        sessionCodeView = findViewById(R.id.SessionCode)
+
+        updateSessionCode(sessionCode)
+
+        sessionCodeView.setOnClickListener {
+            val code = activeSessionCode
+
+            if (code.isNotBlank()) {
+                val clipboard = getSystemService(CLIPBOARD_SERVICE)
+                        as ClipboardManager
+
+                clipboard.setPrimaryClip(
+                    ClipData.newPlainText(
+                        "Session code",
+                        code
+                    )
+                )
+
+                ToastMessage("Session code copied")
+            }
+        }
 
         changeDeviceButton.setOnClickListener {
             changeDevice()
@@ -167,6 +211,23 @@ class MainActivity : AppCompatActivity() {
         image.adjustViewBounds = false
         image.pivotX = 0f
         image.pivotY = 0f
+
+        drawingLegendScroll.visibility = View.GONE
+    }
+
+    private fun updateSessionCode(code: String) {
+        if (!::sessionCodeView.isInitialized) return
+
+        activeSessionCode = code.trim()
+
+        sessionCodeView.post {
+            if (activeSessionCode.isBlank()) {
+                sessionCodeView.visibility = View.GONE
+            } else {
+                sessionCodeView.text = "CODE: $activeSessionCode"
+                sessionCodeView.visibility = View.VISIBLE
+            }
+        }
     }
 
     private fun initializeMap() {
@@ -196,6 +257,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializeDrawing() {
+        drawingManager.onDrawingChanged = {
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+
+                updateDrawingLegend()
+
+                if (::drawingToolbar.isInitialized) {
+                    drawingToolbar.updateButtons()
+                }
+
+                if (::mapOverlay.isInitialized) {
+                    mapOverlay.invalidate()
+                }
+            }
+        }
+
         drawingToolbar = MapDrawingToolbar(
             context = this,
             container = mapContainer,
@@ -211,13 +288,185 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         )
+
+        updateDrawingLegend()
+    }
+
+    private fun updateDrawingLegend() {
+        if (!::drawingLegend.isInitialized) return
+
+        drawingLegend.removeAllViews()
+
+        val entries = drawingManager.getLegendEntries()
+
+        if (entries.isEmpty()) {
+            drawingLegendScroll.visibility = View.INVISIBLE
+            return
+        }
+
+        drawingLegendScroll.visibility = View.VISIBLE
+
+        val density = resources.displayMetrics.density
+
+        entries.forEach { entry ->
+
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+
+                setPadding(
+                    (9 * density).toInt(),
+                    0,
+                    (12 * density).toInt(),
+                    0
+                )
+
+                isClickable = true
+                isFocusable = true
+
+                setBackgroundResource(
+                    android.R.drawable.list_selector_background
+                )
+
+                setOnClickListener {
+                    editDrawingLegendDescription(
+                        entry.color,
+                        entry.colorName,
+                        entry.description
+                    )
+                }
+            }
+
+            val colorCircle = View(this).apply {
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(entry.color)
+
+                    if (entry.color == Color.WHITE) {
+                        setStroke(
+                            (1 * density).toInt(),
+                            Color.LTGRAY
+                        )
+                    }
+                }
+
+                layoutParams = LinearLayout.LayoutParams(
+                    (13 * density).toInt(),
+                    (13 * density).toInt()
+                )
+            }
+
+            val label = TextView(this).apply {
+                text = if (entry.description.isBlank()) {
+                    entry.colorName
+                } else {
+                    "${entry.colorName} — ${entry.description}"
+                }
+
+                setTextColor(Color.rgb(220, 232, 245))
+                textSize = 11f
+
+                setPadding(
+                    (6 * density).toInt(),
+                    0,
+                    0,
+                    0
+                )
+
+                maxLines = 1
+                setTypeface(
+                    Typeface.DEFAULT,
+                    Typeface.BOLD
+                )
+            }
+
+            item.addView(colorCircle)
+            item.addView(label)
+
+            drawingLegend.addView(item)
+        }
+    }
+
+    private fun editDrawingLegendDescription(
+        color: Int,
+        colorName: String,
+        currentDescription: String
+    ) {
+        val density = resources.displayMetrics.density
+
+        val input = EditText(this).apply {
+            setText(currentDescription)
+            hint = "Enter description..."
+            setSingleLine(true)
+
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+
+            setPadding(
+                (12 * density).toInt(),
+                (12 * density).toInt(),
+                (12 * density).toInt(),
+                (12 * density).toInt()
+            )
+        }
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+
+            setPadding(
+                (20 * density).toInt(),
+                (8 * density).toInt(),
+                (20 * density).toInt(),
+                0
+            )
+
+            addView(
+                input,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(colorName)
+            .setMessage("Enter your own description for this color.")
+            .setView(layout)
+            .setPositiveButton("SAVE", null)
+            .setNegativeButton("CANCEL", null)
+            .setNeutralButton("CLEAR", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener {
+                    drawingManager.setColorDescription(
+                        color,
+                        input.text.toString()
+                    )
+
+                    dialog.dismiss()
+                }
+
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+                .setOnClickListener {
+                    drawingManager.setColorDescription(
+                        color,
+                        ""
+                    )
+
+                    dialog.dismiss()
+                }
+        }
+
+        dialog.show()
     }
 
     private fun initializeGestures() {
         scaleDetector = ScaleGestureDetector(
             this,
             object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-
                 override fun onScale(
                     detector: ScaleGestureDetector
                 ): Boolean {
@@ -232,10 +481,7 @@ class MainActivity : AppCompatActivity() {
 
                     zoom = (
                             zoom * detector.scaleFactor
-                            ).coerceIn(
-                            MIN_ZOOM,
-                            MAX_ZOOM
-                        )
+                            ).coerceIn(MIN_ZOOM, MAX_ZOOM)
 
                     val factor = zoom / oldZoom
 
@@ -248,7 +494,6 @@ class MainActivity : AppCompatActivity() {
                                 (detector.focusY - translateY) * factor
 
                     applyMapTransform()
-
                     return true
                 }
             }
@@ -267,95 +512,146 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializeApi() {
-        apiClient = WarThunderApiClient(
-            applicationContext
-        )
+        apiClient = WarThunderApiClient(applicationContext)
     }
 
-    private fun handleDrawingTouch(
-        event: MotionEvent
-    ): Boolean {
-        val mapRect = mapOverlay.getMapRect() ?: return true
+    private fun initializeMultiplayer() {
+        multiplayer = MultiplayerSessionManager(
+            applicationContext,
+            object : MultiplayerSessionManager.Listener {
 
-        val x = (event.x - translateX) / zoom
-        val y = (event.y - translateY) / zoom
+                override fun onStatus(message: String) {
+                    runOnUiThread {
+                        updateStatus(message)
+                    }
+                }
 
-        val insideMap = mapRect.contains(x, y)
+                override fun onSessionCreated(code: String) {
+                    runOnUiThread {
+                        updateSessionCode(code)
 
-        val normalizedX =
-            ((x - mapRect.left) / mapRect.width())
-                .coerceIn(0f, 1f)
+                        updateStatus("Session: $code")
+                        updateMapHint("Share this code: $code")
 
-        val normalizedY =
-            ((y - mapRect.top) / mapRect.height())
-                .coerceIn(0f, 1f)
+                        showSessionCodeDialog(code)
+                        startSearching()
+                    }
+                }
 
-        when (event.actionMasked) {
+                override fun onParticipantJoined(name: String) {
+                    runOnUiThread {
+                        ToastMessage("$name joined the session")
+                    }
+                }
 
-            MotionEvent.ACTION_DOWN -> {
-                if (!insideMap) return true
+                override fun onParticipantLeft(uid: String) {
+                    runOnUiThread {
+                        ToastMessage("A participant left the session")
+                    }
+                }
 
-                drawingManager.startStroke(
-                    normalizedX,
-                    normalizedY
-                )
+                override fun onMapReceived(
+                    info: JSONObject,
+                    objects: JSONObject,
+                    image: ByteArray?
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
 
-                mapOverlay.invalidate()
-                drawingToolbar.updateButtons()
-            }
+                        if (!info.optBoolean("valid", false)) {
+                            clearMap()
+                            updateMapHint("Waiting for a battle...")
+                            updateStatus("Host is waiting for a battle...")
+                            return@runOnUiThread
+                        }
 
-            MotionEvent.ACTION_MOVE -> {
-                if (insideMap) {
-                    drawingManager.addPoint(
-                        normalizedX,
-                        normalizedY
-                    )
+                        if (image != null && image.isNotEmpty()) {
+                            val bitmap = BitmapFactory.decodeByteArray(
+                                image,
+                                0,
+                                image.size
+                            )
 
-                    mapOverlay.invalidate()
+                            if (bitmap != null) {
+                                setMapBitmap(bitmap)
+                            }
+                        }
+
+                        applyReceivedObjects(objects)
+
+                        updateMapHint(
+                            if (currentBitmap != null) "" else "Loading map..."
+                        )
+                    }
+                }
+
+                override fun onObjectsReceived(objects: JSONObject) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        applyReceivedObjects(objects)
+                    }
+                }
+
+                override fun onError(message: String) {
+                    runOnUiThread {
+                        updateStatus(message)
+                        ToastMessage(message)
+                    }
                 }
             }
+        )
 
-            MotionEvent.ACTION_UP,
-            MotionEvent.ACTION_CANCEL -> {
-                drawingManager.finishStroke()
+        multiplayer.initialize { success ->
+            runOnUiThread {
+                if (!success || isFinishing || isDestroyed) return@runOnUiThread
 
-                drawingToolbar.updateButtons()
-                mapOverlay.invalidate()
+                if (isHost) {
+                    multiplayer.createSession(username)
+                } else {
+                    if (sessionCode.isBlank()) {
+                        updateStatus("Missing session code")
+                        return@runOnUiThread
+                    }
+
+                    updateSessionCode(sessionCode)
+                    multiplayer.joinSession(sessionCode, username)
+                }
             }
         }
-
-        return true
     }
 
-    private fun exportTacticalMap(uri: Uri) {
-        val bitmap = currentBitmap ?: run {
-            updateStatus("No map to export")
-            return
-        }
+    private fun showSessionCodeDialog(code: String) {
+        if (isFinishing || isDestroyed) return
 
-        val success = TacticalMapExporter.export(
-            contentResolver,
-            uri,
-            bitmap,
-            mapOverlay
-        )
+        AlertDialog.Builder(this)
+            .setTitle("Multiplayer session created")
+            .setMessage(
+                "Give this code to other players:\n\n$code"
+            )
+            .setPositiveButton("OK", null)
+            .setCancelable(false)
+            .show()
+    }
 
-        updateStatus(
-            if (success) {
-                "Map exported successfully"
-            } else {
-                "Map export failed"
-            }
-        )
+    private fun ToastMessage(message: String) {
+        android.widget.Toast.makeText(
+            this,
+            message,
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
     }
 
     private fun startSearching() {
+        if (!isHost) return
+
         updateTask?.cancel(false)
 
         updateTask = scheduler.scheduleWithFixedDelay(
             {
                 try {
-                    if (apiClient.getServerAddress() == null) {
+                    val client = apiClient ?: return@scheduleWithFixedDelay
+
+                    if (client.getServerAddress() == null) {
                         discoverServer()
                     } else {
                         loadMap()
@@ -371,37 +667,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun discoverServer() {
-        if (isDiscovering) return
-        if (deviceSelectionDialogShowing) return
+        val client = apiClient ?: return
+
+        if (isDiscovering || deviceSelectionDialogShowing) return
 
         isDiscovering = true
 
-        Log.d(TAG, "Starting device discovery")
-
-        apiClient.discover { devices ->
+        client.discover { devices ->
             runOnUiThread {
                 isDiscovering = false
 
-                if (isFinishing || isDestroyed) {
-                    return@runOnUiThread
-                }
-
-                Log.i(
-                    TAG,
-                    "Discovery finished. Devices found: ${devices.size}"
-                )
-
-                devices.forEach {
-                    Log.i(
-                        TAG,
-                        "Found device: ${it.name} - ${it.address}"
-                    )
-                }
+                if (isFinishing || isDestroyed) return@runOnUiThread
 
                 if (devices.isEmpty()) {
-                    updateStatus(
-                        "Searching for War Thunder..."
-                    )
+                    updateStatus("Searching for War Thunder...")
                 } else {
                     showDeviceSelectionDialog(devices)
                 }
@@ -412,9 +691,7 @@ class MainActivity : AppCompatActivity() {
     private fun showDeviceSelectionDialog(
         devices: List<WarThunderApiClient.ServerDevice>
     ) {
-        if (isFinishing || isDestroyed || devices.isEmpty()) {
-            return
-        }
+        if (isFinishing || isDestroyed || devices.isEmpty()) return
 
         deviceSelectionDialog?.dismiss()
         deviceSelectionDialogShowing = true
@@ -425,12 +702,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         devices.forEachIndexed { index, device ->
-
-            Log.i(
-                TAG,
-                "Dialog device $index: name='${device.name}', address='${device.address}'"
-            )
-
             val button = TextView(this).apply {
                 text = "${device.name}\n${device.address}"
                 textSize = 16f
@@ -445,19 +716,12 @@ class MainActivity : AppCompatActivity() {
                 isFocusable = true
 
                 setOnClickListener {
-                    apiClient.selectServer(device.address)
-
+                    apiClient?.selectServer(device.address)
                     deviceSelectionDialog?.dismiss()
-
                     clearMap()
 
-                    updateStatus(
-                        "Connected: ${device.name}"
-                    )
-
-                    updateMapHint(
-                        "Waiting for a battle..."
-                    )
+                    updateStatus("Connected: ${device.name}")
+                    updateMapHint("Waiting for a battle...")
                 }
             }
 
@@ -470,12 +734,10 @@ class MainActivity : AppCompatActivity() {
             )
 
             if (index < devices.lastIndex) {
-                val divider = View(this).apply {
-                    setBackgroundColor(Color.DKGRAY)
-                }
-
                 layout.addView(
-                    divider,
+                    View(this).apply {
+                        setBackgroundColor(Color.DKGRAY)
+                    },
                     LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         1
@@ -501,14 +763,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun changeDevice() {
+        if (!isHost) return
+
         deviceSelectionDialog?.dismiss()
         deviceSelectionDialog = null
         deviceSelectionDialogShowing = false
 
-        apiClient.disconnect()
+        apiClient?.disconnect()
 
         isLoading = false
         isDiscovering = false
+        lastSentMapKey = ""
 
         clearMap()
 
@@ -519,52 +784,45 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadMap() {
+        val client = apiClient ?: return
+
         if (isLoading) return
 
         isLoading = true
 
-        apiClient.loadMap { data ->
+        client.loadMap { data ->
             runOnUiThread {
                 isLoading = false
 
-                if (isFinishing || isDestroyed) {
-                    return@runOnUiThread
-                }
+                if (isFinishing || isDestroyed) return@runOnUiThread
 
                 if (
                     data != null &&
-                    data.address != apiClient.getServerAddress()
+                    data.address != client.getServerAddress()
                 ) {
                     return@runOnUiThread
                 }
 
                 if (data == null) {
-                    if (apiClient.getServerAddress() == null) {
-                        updateStatus(
-                            "Connection lost. Searching again..."
-                        )
-
-                        updateMapHint(
-                            "Searching for War Thunder..."
-                        )
-
-                        updateLegend(
-                            MapData(
-                                emptyList(),
-                                emptyList(),
-                                false
-                            )
-                        )
+                    if (client.getServerAddress() == null) {
+                        updateStatus("Connection lost. Searching again...")
+                        updateMapHint("Searching for War Thunder...")
                     }
-
                     return@runOnUiThread
                 }
 
                 if (!data.info.optBoolean("valid", false)) {
-                    clearMap()
+                    if (currentBitmap != null) {
+                        clearMap()
+                    }
+
+                    multiplayer.sendMap(
+                        data.info,
+                        JSONObject(),
+                        null
+                    )
 
                     updateMapHint("Waiting for a battle...")
-
                     updateStatus(
                         "Connected: ${getSelectedDeviceName(data.address)}"
                     )
@@ -573,7 +831,6 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 val generation = data.info.optInt("map_generation", -1)
-
                 val hudType = data.info.optInt("hud_type", -1)
 
                 val newDrawingKey = drawingManager.createMapKey(
@@ -585,6 +842,8 @@ class MainActivity : AppCompatActivity() {
                     mapOverlay.invalidate()
                     drawingToolbar.updateButtons()
                 }
+
+                val mapKey = "$generation:$hudType"
 
                 if (data.image != null) {
                     val shouldUpdateImage =
@@ -600,61 +859,38 @@ class MainActivity : AppCompatActivity() {
                         )
 
                         if (bitmap != null) {
-                            val previousBitmap = currentBitmap
-
-                            currentBitmap = bitmap
-                            image.setImageBitmap(bitmap)
-
-                            hasLoadedImage = true
-
-                            drawingToolbar.setExportVisible(true)
+                            setMapBitmap(bitmap)
 
                             lastGeneration = generation
                             lastHudType = hudType
 
-                            resetMapTransform()
-
-                            image.post {
-                                applyMapTransform()
-                                mapOverlay.invalidate()
-                            }
-
-                            if (
-                                previousBitmap != null &&
-                                previousBitmap !== bitmap &&
-                                !previousBitmap.isRecycled
-                            ) {
-                                previousBitmap.recycle()
-                            }
-
-                            Log.i(
-                                TAG,
-                                "Map image loaded: ${bitmap.width}x${bitmap.height}, key=${drawingManager.currentKey}"
+                            multiplayer.sendMap(
+                                data.info,
+                                data.objects,
+                                data.image
                             )
+
+                            lastSentMapKey = mapKey
                         }
                     }
                 }
 
-                updateMapHint(
-                    if (currentBitmap != null) {
-                        ""
-                    } else {
-                        "Loading map..."
-                    }
-                )
-
-                val newMapData =
-                    WarThunderMapParser.parse(data.objects)
+                val newMapData = WarThunderMapParser.parse(data.objects)
 
                 currentMapData = newMapData
-
                 mapOverlay.setMapData(currentMapData)
 
                 updateLegend(currentMapData)
+                updateDrawingLegend()
 
                 drawingToolbar.updateButtons()
-
                 mapOverlay.invalidate()
+
+                multiplayer.sendObjects(data.objects)
+
+                updateMapHint(
+                    if (currentBitmap != null) "" else "Loading map..."
+                )
 
                 updateStatus(
                     "Connected: ${getSelectedDeviceName(data.address)}"
@@ -663,9 +899,43 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun getSelectedDeviceName(
-        address: String
-    ): String {
+    private fun setMapBitmap(bitmap: Bitmap) {
+        val previousBitmap = currentBitmap
+
+        currentBitmap = bitmap
+        image.setImageBitmap(bitmap)
+        hasLoadedImage = true
+
+        drawingToolbar.setExportVisible(true)
+
+        resetMapTransform()
+
+        image.post {
+            applyMapTransform()
+            mapOverlay.invalidate()
+        }
+
+        if (
+            previousBitmap != null &&
+            previousBitmap !== bitmap &&
+            !previousBitmap.isRecycled
+        ) {
+            previousBitmap.recycle()
+        }
+    }
+
+    private fun applyReceivedObjects(objects: JSONObject) {
+        val newMapData = WarThunderMapParser.parse(objects)
+
+        currentMapData = newMapData
+        mapOverlay.setMapData(newMapData)
+
+        updateLegend(newMapData)
+        drawingToolbar.updateButtons()
+        mapOverlay.invalidate()
+    }
+
+    private fun getSelectedDeviceName(address: String): String {
         return address
             .removePrefix("http://")
             .substringBefore(":")
@@ -677,19 +947,14 @@ class MainActivity : AppCompatActivity() {
         val visibleUnits = data.markers
             .filter {
                 when {
-                    data.isAirView ->
-                        it.type == MarkerType.AIR_UNIT
-
-                    else ->
-                        it.type == MarkerType.GROUND_UNIT
+                    data.isAirView -> it.type == MarkerType.AIR_UNIT
+                    else -> it.type == MarkerType.GROUND_UNIT
                 }
             }
-            .distinctBy {
-                it.iconName
-            }
+            .distinctBy { it.iconName }
 
         if (visibleUnits.isEmpty()) {
-            mapLegendScroll.visibility = View.GONE
+            mapLegendScroll.visibility = View.INVISIBLE
             return
         }
 
@@ -743,7 +1008,6 @@ class MainActivity : AppCompatActivity() {
                 )
 
                 setColorFilter(unit.color)
-
                 scaleType = ImageView.ScaleType.FIT_CENTER
 
                 contentDescription =
@@ -782,17 +1046,13 @@ class MainActivity : AppCompatActivity() {
         val previousBitmap = currentBitmap
 
         currentBitmap = null
-
         hasLoadedImage = false
         lastGeneration = -1
         lastHudType = -1
 
         image.setImageDrawable(null)
 
-        if (
-            previousBitmap != null &&
-            !previousBitmap.isRecycled
-        ) {
+        if (previousBitmap != null && !previousBitmap.isRecycled) {
             previousBitmap.recycle()
         }
 
@@ -805,36 +1065,73 @@ class MainActivity : AppCompatActivity() {
         mapOverlay.setMapData(currentMapData)
 
         updateLegend(currentMapData)
+        updateDrawingLegend()
 
         drawingToolbar.closeDrawingTools()
         drawingToolbar.setExportVisible(false)
 
         resetMapTransform()
-
         mapOverlay.invalidate()
     }
 
-    private fun resetMapTransform() {
-        zoom = 1f
-        translateX = 0f
-        translateY = 0f
+    private fun handleDrawingTouch(event: MotionEvent): Boolean {
+        val mapRect = mapOverlay.getMapRect() ?: return true
 
-        applyMapTransform()
+        val x = (event.x - translateX) / zoom
+        val y = (event.y - translateY) / zoom
+
+        val insideMap = mapRect.contains(x, y)
+
+        val normalizedX =
+            ((x - mapRect.left) / mapRect.width()).coerceIn(0f, 1f)
+
+        val normalizedY =
+            ((y - mapRect.top) / mapRect.height()).coerceIn(0f, 1f)
+
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                if (!insideMap) return true
+
+                drawingManager.startStroke(
+                    normalizedX,
+                    normalizedY
+                )
+
+                mapOverlay.invalidate()
+                drawingToolbar.updateButtons()
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                if (insideMap) {
+                    drawingManager.addPoint(
+                        normalizedX,
+                        normalizedY
+                    )
+
+                    mapOverlay.invalidate()
+                }
+            }
+
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_CANCEL -> {
+                drawingManager.finishStroke()
+
+                drawingToolbar.updateButtons()
+                mapOverlay.invalidate()
+            }
+        }
+
+        return true
     }
 
-    private fun handleTouch(
-        event: MotionEvent
-    ): Boolean {
+    private fun handleTouch(event: MotionEvent): Boolean {
         scaleDetector.onTouchEvent(event)
 
         when (event.actionMasked) {
-
             MotionEvent.ACTION_DOWN -> {
                 lastTouchX = event.x
                 lastTouchY = event.y
-
                 isDragging = true
-
                 return true
             }
 
@@ -899,10 +1196,45 @@ class MainActivity : AppCompatActivity() {
         mapOverlay.invalidate()
     }
 
-    private fun updateStatus(message: String) {
-        if (!::status.isInitialized) return
+    private fun resetMapTransform() {
+        zoom = 1f
+        translateX = 0f
+        translateY = 0f
 
-        status.text = message
+        applyMapTransform()
+    }
+
+    private fun exportTacticalMap(uri: Uri) {
+        val bitmap = currentBitmap ?: run {
+            updateStatus("No map to export")
+            return
+        }
+
+        val success = TacticalMapExporter.export(
+            contentResolver = contentResolver,
+            uri = uri,
+            sourceBitmap = bitmap,
+            overlay = mapOverlay,
+            drawingEntries = drawingManager.getLegendEntries()
+        )
+
+        updateStatus(
+            if (success) {
+                "Map exported successfully"
+            } else {
+                "Map export failed"
+            }
+        )
+
+        if (success) {
+            ToastMessage("Map with drawings exported")
+        }
+    }
+
+    private fun updateStatus(message: String) {
+        if (::status.isInitialized) {
+            status.text = message
+        }
     }
 
     private fun updateMapHint(message: String) {
@@ -911,22 +1243,19 @@ class MainActivity : AppCompatActivity() {
         searchMapHint.text = message
 
         searchMapHint.visibility =
-            if (message.isBlank()) {
-                View.GONE
-            } else {
-                View.VISIBLE
-            }
+            if (message.isBlank()) View.GONE else View.VISIBLE
     }
 
     override fun onDestroy() {
         deviceSelectionDialog?.dismiss()
 
         updateTask?.cancel(true)
-
         scheduler.shutdownNow()
 
-        if (::apiClient.isInitialized) {
-            apiClient.shutdown()
+        apiClient?.shutdown()
+
+        if (::multiplayer.isInitialized) {
+            multiplayer.shutdown()
         }
 
         super.onDestroy()

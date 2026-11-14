@@ -117,25 +117,10 @@ class MapDrawingToolbar(
             )
         }
 
-        pencilButton = createIcon(
-            R.drawable.ic_pen,
-            "Pencil"
-        )
-
-        eraserButton = createIcon(
-            R.drawable.ic_eraser,
-            "Eraser"
-        )
-
-        undoButton = createIcon(
-            R.drawable.ic_undo,
-            "Undo"
-        )
-
-        redoButton = createIcon(
-            R.drawable.ic_redo,
-            "Redo"
-        )
+        pencilButton = createIcon(R.drawable.ic_pen, "Pencil")
+        eraserButton = createIcon(R.drawable.ic_eraser, "Eraser")
+        undoButton = createIcon(R.drawable.ic_undo, "Undo")
+        redoButton = createIcon(R.drawable.ic_redo, "Redo")
 
         val drawingControls = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -244,7 +229,6 @@ class MapDrawingToolbar(
             textSize = 10f
             setTextColor(Color.rgb(190, 205, 220))
             gravity = Gravity.CENTER_VERTICAL
-
             setTypeface(
                 android.graphics.Typeface.DEFAULT,
                 android.graphics.Typeface.BOLD
@@ -256,7 +240,6 @@ class MapDrawingToolbar(
             textSize = 10f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-
             setTypeface(
                 android.graphics.Typeface.DEFAULT,
                 android.graphics.Typeface.BOLD
@@ -264,12 +247,8 @@ class MapDrawingToolbar(
         }
 
         brushSizeSeekBar = SeekBar(context).apply {
-            // Zakres 1–10 dp
             max = 9
-
-            progress = (
-                    drawingManager.brushSizeDp.toInt() - 1
-                    ).coerceIn(0, 9)
+            progress = (drawingManager.brushSizeDp.toInt() - 1).coerceIn(0, 9)
 
             progressTintList =
                 android.content.res.ColorStateList.valueOf(
@@ -277,55 +256,35 @@ class MapDrawingToolbar(
                 )
 
             thumbTintList =
-                android.content.res.ColorStateList.valueOf(
-                    Color.WHITE
-                )
+                android.content.res.ColorStateList.valueOf(Color.WHITE)
 
             setOnSeekBarChangeListener(
                 object : SeekBar.OnSeekBarChangeListener {
-
                     override fun onProgressChanged(
                         seekBar: SeekBar?,
                         progress: Int,
                         fromUser: Boolean
                     ) {
                         val size = (progress + 1).toFloat()
-
-                        // Wspólny rozmiar dla ołówka i gumki
                         drawingManager.brushSizeDp = size
-
                         brushSizeLabel.text = "${size.toInt()} dp"
-
                         onInvalidate()
                     }
 
-                    override fun onStartTrackingTouch(
-                        seekBar: SeekBar?
-                    ) {
-                    }
-
-                    override fun onStopTrackingTouch(
-                        seekBar: SeekBar?
-                    ) {
-                    }
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) {}
                 }
             )
         }
 
         brushSizeRow.addView(
             brushTitle,
-            LinearLayout.LayoutParams(
-                dp(38),
-                dp(34)
-            )
+            LinearLayout.LayoutParams(dp(38), dp(34))
         )
 
         brushSizeRow.addView(
             brushSizeSeekBar,
-            LinearLayout.LayoutParams(
-                dp(155),
-                dp(34)
-            ).apply {
+            LinearLayout.LayoutParams(dp(155), dp(34)).apply {
                 marginStart = dp(5)
                 marginEnd = dp(7)
             }
@@ -333,10 +292,7 @@ class MapDrawingToolbar(
 
         brushSizeRow.addView(
             brushSizeLabel,
-            LinearLayout.LayoutParams(
-                dp(42),
-                dp(34)
-            )
+            LinearLayout.LayoutParams(dp(42), dp(34))
         )
 
         toolbar.addView(
@@ -353,11 +309,7 @@ class MapDrawingToolbar(
         description: String
     ): ImageButton {
         return ImageButton(context).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                dp(42),
-                dp(42)
-            )
-
+            layoutParams = LinearLayout.LayoutParams(dp(42), dp(42))
             setImageResource(resource)
 
             imageTintList =
@@ -366,12 +318,7 @@ class MapDrawingToolbar(
             scaleType = ImageView.ScaleType.FIT_CENTER
             contentDescription = description
 
-            setPadding(
-                dp(10),
-                dp(10),
-                dp(10),
-                dp(10)
-            )
+            setPadding(dp(10), dp(10), dp(10), dp(10))
 
             setBackgroundResource(
                 android.R.drawable.list_selector_background
@@ -407,12 +354,7 @@ class MapDrawingToolbar(
                 setColorFilter(color)
                 scaleType = ImageView.ScaleType.FIT_CENTER
 
-                setPadding(
-                    dp(4),
-                    dp(4),
-                    dp(4),
-                    dp(4)
-                )
+                setPadding(dp(4), dp(4), dp(4), dp(4))
 
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
@@ -427,8 +369,7 @@ class MapDrawingToolbar(
 
                 setOnClickListener {
                     drawingManager.currentColor = color
-                    drawingManager.activeTool =
-                        MapDrawingManager.Tool.PENCIL
+                    drawingManager.activeTool = MapDrawingManager.Tool.PENCIL
 
                     palette.visibility = View.GONE
 
@@ -449,14 +390,11 @@ class MapDrawingToolbar(
         drawButton.setOnClickListener {
             val show = toolbar.visibility != View.VISIBLE
 
-            toolbar.visibility =
-                if (show) View.VISIBLE else View.GONE
-
+            toolbar.visibility = if (show) View.VISIBLE else View.GONE
             palette.visibility = View.GONE
 
             if (!show) {
-                drawingManager.activeTool =
-                    MapDrawingManager.Tool.NONE
+                drawingManager.activeTool = MapDrawingManager.Tool.NONE
             }
 
             drawButton.text = if (show) "CLOSE" else "DRAW"
@@ -466,8 +404,7 @@ class MapDrawingToolbar(
         }
 
         pencilButton.setOnClickListener {
-            drawingManager.activeTool =
-                MapDrawingManager.Tool.PENCIL
+            drawingManager.activeTool = MapDrawingManager.Tool.PENCIL
 
             palette.visibility =
                 if (palette.visibility == View.VISIBLE) {
@@ -480,9 +417,7 @@ class MapDrawingToolbar(
         }
 
         eraserButton.setOnClickListener {
-            drawingManager.activeTool =
-                MapDrawingManager.Tool.ERASER
-
+            drawingManager.activeTool = MapDrawingManager.Tool.ERASER
             palette.visibility = View.GONE
             updateButtons()
         }
@@ -509,27 +444,21 @@ class MapDrawingToolbar(
         val normalColor = Color.rgb(17, 26, 39)
 
         pencilButton.setBackgroundColor(
-            if (drawingManager.activeTool ==
-                MapDrawingManager.Tool.PENCIL
-            ) activeColor else normalColor
+            if (drawingManager.activeTool == MapDrawingManager.Tool.PENCIL)
+                activeColor else normalColor
         )
 
         eraserButton.setBackgroundColor(
-            if (drawingManager.activeTool ==
-                MapDrawingManager.Tool.ERASER
-            ) activeColor else normalColor
+            if (drawingManager.activeTool == MapDrawingManager.Tool.ERASER)
+                activeColor else normalColor
         )
 
-        undoButton.alpha =
-            if (drawingManager.canUndo) 1f else 0.4f
-
-        redoButton.alpha =
-            if (drawingManager.canRedo) 1f else 0.4f
+        undoButton.alpha = if (drawingManager.canUndo) 1f else 0.4f
+        redoButton.alpha = if (drawingManager.canRedo) 1f else 0.4f
     }
 
     fun setExportVisible(visible: Boolean) {
-        exportButton.visibility =
-            if (visible) View.VISIBLE else View.GONE
+        exportButton.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
     fun closeDrawingTools() {
@@ -537,8 +466,7 @@ class MapDrawingToolbar(
         palette.visibility = View.GONE
         drawButton.text = "DRAW"
 
-        drawingManager.activeTool =
-            MapDrawingManager.Tool.NONE
+        drawingManager.activeTool = MapDrawingManager.Tool.NONE
 
         updateButtons()
     }

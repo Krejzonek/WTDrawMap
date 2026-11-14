@@ -27,9 +27,16 @@ class MapDrawingManager(
         val points: MutableList<PointF>
     )
 
+    data class LegendEntry(
+        val color: Int,
+        val colorName: String,
+        val description: String
+    )
+
     private data class DrawingLayer(
         val strokes: MutableList<Stroke> = mutableListOf(),
-        val redo: MutableList<Stroke> = mutableListOf()
+        val redo: MutableList<Stroke> = mutableListOf(),
+        val legendDescriptions: MutableMap<Int, String> = mutableMapOf()
     )
 
     private val layers = mutableMapOf<String, DrawingLayer>()
@@ -38,14 +45,14 @@ class MapDrawingManager(
         private set
 
     var activeTool = Tool.NONE
-
     var currentColor = Color.RED
 
-    // Wspólny rozmiar ołówka i gumki: 1–10 dp
     var brushSizeDp = 4f
         set(value) {
             field = value.coerceIn(1f, 10f)
         }
+
+    var onDrawingChanged: (() -> Unit)? = null
 
     private var activeStroke: Stroke? = null
 
@@ -67,6 +74,7 @@ class MapDrawingManager(
         currentKey = key
         currentLayer
 
+        onDrawingChanged?.invoke()
         return true
     }
 
@@ -121,6 +129,8 @@ class MapDrawingManager(
         currentLayer.strokes.add(stroke)
         currentLayer.redo.clear()
         activeStroke = stroke
+
+        onDrawingChanged?.invoke()
     }
 
     fun addPoint(
@@ -139,6 +149,7 @@ class MapDrawingManager(
 
     fun finishStroke() {
         activeStroke = null
+        onDrawingChanged?.invoke()
     }
 
     fun undo() {
@@ -151,6 +162,7 @@ class MapDrawingManager(
         )
 
         activeStroke = null
+        onDrawingChanged?.invoke()
     }
 
     fun redo() {
@@ -163,12 +175,54 @@ class MapDrawingManager(
         )
 
         activeStroke = null
+        onDrawingChanged?.invoke()
     }
 
     fun clearAll() {
         layers.clear()
         currentKey = "default"
         activeStroke = null
+
+        onDrawingChanged?.invoke()
+    }
+
+    fun getLegendEntries(): List<LegendEntry> {
+        val usedColors = currentLayer.strokes
+            .filter { !it.isEraser }
+            .map { it.color }
+            .distinct()
+
+        return usedColors.map { color ->
+            LegendEntry(
+                color = color,
+                colorName = getColorName(color),
+                description = currentLayer.legendDescriptions[color].orEmpty()
+            )
+        }
+    }
+
+    fun setColorDescription(
+        color: Int,
+        description: String
+    ) {
+        currentLayer.legendDescriptions[color] = description.trim()
+        onDrawingChanged?.invoke()
+    }
+
+    private fun getColorName(color: Int): String {
+        return when (color) {
+            Color.RED -> "Red"
+            Color.rgb(255, 140, 0) -> "Orange"
+            Color.YELLOW -> "Yellow"
+            Color.GREEN -> "Green"
+            Color.CYAN -> "Cyan"
+            Color.BLUE -> "Blue"
+            Color.rgb(160, 70, 220) -> "Purple"
+            Color.MAGENTA -> "Magenta"
+            Color.WHITE -> "White"
+            Color.BLACK -> "Black"
+            else -> "Custom"
+        }
     }
 
     fun draw(
@@ -190,9 +244,7 @@ class MapDrawingManager(
 
                 if (stroke.isEraser) {
                     color = Color.TRANSPARENT
-                    xfermode = PorterDuffXfermode(
-                        PorterDuff.Mode.CLEAR
-                    )
+                    xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
                 } else {
                     color = stroke.color
                 }
@@ -200,11 +252,8 @@ class MapDrawingManager(
 
             val first = stroke.points.first()
 
-            val firstX =
-                mapRect.left + first.x * mapRect.width()
-
-            val firstY =
-                mapRect.top + first.y * mapRect.height()
+            val firstX = mapRect.left + first.x * mapRect.width()
+            val firstY = mapRect.top + first.y * mapRect.height()
 
             if (stroke.points.size == 1) {
                 paint.style = Paint.Style.FILL
@@ -217,7 +266,6 @@ class MapDrawingManager(
                 )
             } else {
                 val path = Path()
-
                 path.moveTo(firstX, firstY)
 
                 for (i in 1 until stroke.points.size) {
