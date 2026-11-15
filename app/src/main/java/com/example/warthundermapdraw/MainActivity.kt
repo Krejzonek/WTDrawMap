@@ -5,7 +5,6 @@ import android.content.ClipboardManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
-import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -70,6 +69,10 @@ class MainActivity : AppCompatActivity() {
     private var lastGeneration = -1
     private var lastHudType = -1
     private var lastSentMapKey = ""
+
+    private var lastMapInfo: JSONObject? = null
+    private var lastMapObjects: JSONObject? = null
+    private var lastMapImage: ByteArray? = null
 
     private var currentMapData = MapData(
         emptyList(),
@@ -270,6 +273,12 @@ class MainActivity : AppCompatActivity() {
                 if (::mapOverlay.isInitialized) {
                     mapOverlay.invalidate()
                 }
+            }
+        }
+
+        drawingManager.onLocalOperation = { message ->
+            if (::multiplayer.isInitialized) {
+                multiplayer.sendDrawingMessage(message)
             }
         }
 
@@ -529,10 +538,8 @@ class MainActivity : AppCompatActivity() {
                 override fun onSessionCreated(code: String) {
                     runOnUiThread {
                         updateSessionCode(code)
-
                         updateStatus("Session: $code")
                         updateMapHint("Share this code: $code")
-
                         showSessionCodeDialog(code)
                         startSearching()
                     }
@@ -565,6 +572,16 @@ class MainActivity : AppCompatActivity() {
                             return@runOnUiThread
                         }
 
+                        val sharedKey = drawingManager.createMapKey(
+                            "shared",
+                            info
+                        )
+
+                        if (drawingManager.switchLayer(sharedKey)) {
+                            drawingToolbar.updateButtons()
+                            mapOverlay.invalidate()
+                        }
+
                         if (image != null && image.isNotEmpty()) {
                             val bitmap = BitmapFactory.decodeByteArray(
                                 image,
@@ -582,6 +599,14 @@ class MainActivity : AppCompatActivity() {
                         updateMapHint(
                             if (currentBitmap != null) "" else "Loading map..."
                         )
+
+                        updateStatus(
+                            if (currentBitmap != null) {
+                                "Connected: Host"
+                            } else {
+                                "Receiving map from host..."
+                            }
+                        )
                     }
                 }
 
@@ -589,6 +614,70 @@ class MainActivity : AppCompatActivity() {
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         applyReceivedObjects(objects)
+                    }
+                }
+
+                override fun onDrawingMessage(
+                    senderUid: String,
+                    message: JSONObject
+                ) {
+                    if (
+                        message.optString("type") ==
+                        "drawingSnapshotRequest"
+                    ) {
+                        if (isHost) {
+                            runOnUiThread {
+                                if (
+                                    !isFinishing &&
+                                    !isDestroyed &&
+                                    ::drawingManager.isInitialized
+                                ) {
+                                    multiplayer.sendDrawingMessage(
+                                        drawingManager.createSnapshot(),
+                                        senderUid
+                                    )
+                                }
+                            }
+                        }
+
+                        return
+                    }
+
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        drawingManager.applyRemoteMessage(message)
+                    }
+                }
+
+                override fun onDrawingChannelReady(uid: String) {
+                    if (!isHost) return
+
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+
+                        val info = lastMapInfo
+                        val objects = lastMapObjects
+
+                        if (
+                            info != null &&
+                            objects != null &&
+                            info.optBoolean("valid", false)
+                        ) {
+                            multiplayer.sendMap(
+                                JSONObject(info.toString()),
+                                JSONObject(objects.toString()),
+                                lastMapImage?.copyOf()
+                            )
+
+                            multiplayer.sendObjects(
+                                JSONObject(objects.toString())
+                            )
+                        }
+
+                        multiplayer.sendDrawingMessage(
+                            drawingManager.createSnapshot(),
+                            uid
+                        )
                     }
                 }
 
@@ -604,6 +693,11 @@ class MainActivity : AppCompatActivity() {
         multiplayer.initialize { success ->
             runOnUiThread {
                 if (!success || isFinishing || isDestroyed) return@runOnUiThread
+
+                drawingManager.setLocalAuthor(
+                    multiplayer.getLocalUid(),
+                    username
+                )
 
                 if (isHost) {
                     multiplayer.createSession(username)
@@ -720,6 +814,10 @@ class MainActivity : AppCompatActivity() {
                     deviceSelectionDialog?.dismiss()
                     clearMap()
 
+                    lastMapInfo = null
+                    lastMapObjects = null
+                    lastMapImage = null
+
                     updateStatus("Connected: ${device.name}")
                     updateMapHint("Waiting for a battle...")
                 }
@@ -775,6 +873,10 @@ class MainActivity : AppCompatActivity() {
         isDiscovering = false
         lastSentMapKey = ""
 
+        lastMapInfo = null
+        lastMapObjects = null
+        lastMapImage = null
+
         clearMap()
 
         updateStatus("Searching for War Thunder...")
@@ -812,6 +914,10 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 if (!data.info.optBoolean("valid", false)) {
+                    lastMapInfo = JSONObject(data.info.toString())
+                    lastMapObjects = JSONObject()
+                    lastMapImage = null
+
                     if (currentBitmap != null) {
                         clearMap()
                     }
@@ -830,17 +936,26 @@ class MainActivity : AppCompatActivity() {
                     return@runOnUiThread
                 }
 
+                lastMapInfo = JSONObject(data.info.toString())
+                lastMapObjects = JSONObject(data.objects.toString())
+
                 val generation = data.info.optInt("map_generation", -1)
                 val hudType = data.info.optInt("hud_type", -1)
 
                 val newDrawingKey = drawingManager.createMapKey(
-                    data.address,
+                    "shared",
                     data.info
                 )
 
                 if (drawingManager.switchLayer(newDrawingKey)) {
                     mapOverlay.invalidate()
                     drawingToolbar.updateButtons()
+
+                    if (::multiplayer.isInitialized) {
+                        multiplayer.sendDrawingMessage(
+                            drawingManager.createSnapshot()
+                        )
+                    }
                 }
 
                 val mapKey = "$generation:$hudType"
@@ -864,6 +979,8 @@ class MainActivity : AppCompatActivity() {
                             lastGeneration = generation
                             lastHudType = hudType
 
+                            lastMapImage = data.image.copyOf()
+
                             multiplayer.sendMap(
                                 data.info,
                                 data.objects,
@@ -872,6 +989,8 @@ class MainActivity : AppCompatActivity() {
 
                             lastSentMapKey = mapKey
                         }
+                    } else if (lastMapImage == null) {
+                        lastMapImage = data.image.copyOf()
                     }
                 }
 
