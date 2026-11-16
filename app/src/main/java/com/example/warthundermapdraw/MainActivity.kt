@@ -2,6 +2,7 @@ package com.example.warthundermapdraw
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -16,6 +17,7 @@ import android.view.ScaleGestureDetector
 import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -53,7 +55,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var changeDeviceButton: TextView
     private lateinit var sessionCodeView: TextView
 
+    private lateinit var tacticalMapButton: ImageButton
+    private lateinit var sideMenu: LinearLayout
+    private lateinit var menuOverlay: View
+    private lateinit var participantsContainer: LinearLayout
+    private lateinit var leaveSessionButton: TextView
+
     private var activeSessionCode = ""
+    private var isSessionMenuOpen = false
+    private var hasActiveSession = false
 
     private var apiClient: WarThunderApiClient? = null
     private lateinit var scaleDetector: ScaleGestureDetector
@@ -69,6 +79,7 @@ class MainActivity : AppCompatActivity() {
     private var lastGeneration = -1
     private var lastHudType = -1
     private var lastSentMapKey = ""
+    private var lastSentObjectsJson = ""
 
     private var lastMapInfo: JSONObject? = null
     private var lastMapObjects: JSONObject? = null
@@ -150,6 +161,7 @@ class MainActivity : AppCompatActivity() {
             }
 
         initializeViews()
+        initializeSessionMenu()
         initializeMap()
         initializeDrawing()
         initializeGestures()
@@ -218,10 +230,297 @@ class MainActivity : AppCompatActivity() {
         drawingLegendScroll.visibility = View.GONE
     }
 
+    private fun initializeSessionMenu() {
+        tacticalMapButton = findViewById(R.id.TacticalMap)
+        sideMenu = findViewById(R.id.SideMenu)
+        menuOverlay = findViewById(R.id.MenuOverlay)
+        participantsContainer = findViewById(R.id.ParticipantsContainer)
+        leaveSessionButton = findViewById(R.id.LeaveSessionButton)
+
+        tacticalMapButton.setOnClickListener {
+            if (isSessionMenuOpen) {
+                closeSessionMenu()
+            } else {
+                openSessionMenu()
+            }
+        }
+
+        menuOverlay.setOnClickListener {
+            closeSessionMenu()
+        }
+
+        leaveSessionButton.setOnClickListener {
+            confirmLeaveSession()
+        }
+
+        updateParticipants(emptyList())
+    }
+
+    private fun openSessionMenu() {
+        isSessionMenuOpen = true
+
+        menuOverlay.visibility = View.VISIBLE
+        sideMenu.visibility = View.VISIBLE
+
+        menuOverlay.bringToFront()
+        sideMenu.bringToFront()
+
+        updateLeaveSessionButton()
+    }
+
+    private fun closeSessionMenu() {
+        isSessionMenuOpen = false
+
+        sideMenu.visibility = View.GONE
+        menuOverlay.visibility = View.GONE
+    }
+
+    private fun updateLeaveSessionButton() {
+        leaveSessionButton.isEnabled = hasActiveSession
+        leaveSessionButton.alpha =
+            if (hasActiveSession) 1f else 0.45f
+
+        leaveSessionButton.text =
+            if (hasActiveSession) {
+                "LEAVE SESSION"
+            } else {
+                "NO ACTIVE SESSION"
+            }
+    }
+
+    private fun updateParticipants(
+        participants: List<SessionParticipant>
+    ) {
+        if (!::participantsContainer.isInitialized) return
+
+        participantsContainer.removeAllViews()
+
+        val density = resources.displayMetrics.density
+
+        val localUid = if (::multiplayer.isInitialized) {
+            multiplayer.getLocalUid()
+        } else {
+            ""
+        }
+
+        if (participants.isEmpty()) {
+            val emptyView = TextView(this).apply {
+                text = if (hasActiveSession) {
+                    "Waiting for participants..."
+                } else {
+                    "No active session"
+                }
+
+                setTextColor(Color.rgb(127, 152, 181))
+                textSize = 12f
+                setPadding(
+                    (20 * density).toInt(),
+                    (12 * density).toInt(),
+                    (20 * density).toInt(),
+                    (12 * density).toInt()
+                )
+            }
+
+            participantsContainer.addView(emptyView)
+            updateLeaveSessionButton()
+            return
+        }
+
+        val sortedParticipants = participants.sortedWith(
+            compareByDescending<SessionParticipant> { it.isHost }
+                .thenBy { it.name.lowercase() }
+        )
+
+        sortedParticipants.forEach { participant ->
+            val isLocalPlayer = participant.uid == localUid
+
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+
+                setPadding(
+                    (18 * density).toInt(),
+                    (11 * density).toInt(),
+                    (16 * density).toInt(),
+                    (11 * density).toInt()
+                )
+
+                setBackgroundResource(
+                    android.R.drawable.list_selector_background
+                )
+            }
+
+            val statusDot = View(this).apply {
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(
+                        if (participant.isHost) {
+                            Color.rgb(114, 214, 155)
+                        } else {
+                            Color.rgb(114, 183, 245)
+                        }
+                    )
+                }
+
+                layoutParams = LinearLayout.LayoutParams(
+                    (8 * density).toInt(),
+                    (8 * density).toInt()
+                )
+            }
+
+            val nameColumn = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(
+                    (12 * density).toInt(),
+                    0,
+                    0,
+                    0
+                )
+
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                )
+            }
+
+            val nameView = TextView(this).apply {
+                text = participant.name.ifBlank { "Player" }
+                setTextColor(Color.rgb(220, 232, 245))
+                textSize = 13f
+                maxLines = 1
+                setTypeface(
+                    Typeface.DEFAULT,
+                    Typeface.BOLD
+                )
+            }
+
+            val roleView = TextView(this).apply {
+                val labels = mutableListOf<String>()
+
+                if (participant.isHost) {
+                    labels.add("HOST")
+                }
+
+                if (isLocalPlayer) {
+                    labels.add("YOU")
+                }
+
+                text = labels.joinToString("  •  ")
+                setTextColor(
+                    if (participant.isHost) {
+                        Color.rgb(114, 214, 155)
+                    } else {
+                        Color.rgb(114, 183, 245)
+                    }
+                )
+                textSize = 9f
+                setTypeface(
+                    Typeface.DEFAULT,
+                    Typeface.BOLD
+                )
+                letterSpacing = 0.08f
+                visibility =
+                    if (labels.isEmpty()) View.GONE else View.VISIBLE
+            }
+
+            nameColumn.addView(nameView)
+            nameColumn.addView(roleView)
+
+            row.addView(statusDot)
+            row.addView(nameColumn)
+
+            participantsContainer.addView(row)
+
+            val divider = View(this).apply {
+                setBackgroundColor(Color.rgb(41, 57, 76))
+            }
+
+            participantsContainer.addView(
+                divider,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    (1 * density).toInt()
+                )
+            )
+        }
+
+        updateLeaveSessionButton()
+    }
+
+    private fun confirmLeaveSession() {
+        if (!hasActiveSession || !::multiplayer.isInitialized) {
+            return
+        }
+
+        val hostLeaving = multiplayer.isHost()
+
+        val message = if (hostLeaving) {
+            "Leaving will close the session for all participants. Do you want to continue?"
+        } else {
+            "Do you want to leave this multiplayer session?"
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Leave session")
+            .setMessage(message)
+            .setPositiveButton("LEAVE") { _, _ ->
+                leaveMultiplayerSession()
+            }
+            .setNegativeButton("CANCEL", null)
+            .show()
+    }
+
+    private fun leaveMultiplayerSession() {
+        if (!::multiplayer.isInitialized) return
+
+        leaveSessionButton.isEnabled = false
+        leaveSessionButton.text = "LEAVING..."
+
+        multiplayer.leaveSession { success, error ->
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+
+                hasActiveSession = false
+                updateSessionCode("")
+                updateParticipants(emptyList())
+
+                updateStatus(
+                    if (success) {
+                        "Returning to home..."
+                    } else {
+                        "Leaving session..."
+                    }
+                )
+
+                val intent = Intent(
+                    this,
+                    HomeActivity::class.java
+                ).apply {
+                    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                }
+
+                startActivity(intent)
+                finish()
+
+                if (!success) {
+                    android.widget.Toast.makeText(
+                        this,
+                        "Session disconnected locally. Firebase error: ${error ?: "Unknown error"}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
     private fun updateSessionCode(code: String) {
         if (!::sessionCodeView.isInitialized) return
 
         activeSessionCode = code.trim()
+
+        hasActiveSession = activeSessionCode.isNotBlank()
 
         sessionCodeView.post {
             if (activeSessionCode.isBlank()) {
@@ -229,6 +528,10 @@ class MainActivity : AppCompatActivity() {
             } else {
                 sessionCodeView.text = "CODE: $activeSessionCode"
                 sessionCodeView.visibility = View.VISIBLE
+            }
+
+            if (::leaveSessionButton.isInitialized) {
+                updateLeaveSessionButton()
             }
         }
     }
@@ -537,6 +840,7 @@ class MainActivity : AppCompatActivity() {
 
                 override fun onSessionCreated(code: String) {
                     runOnUiThread {
+                        hasActiveSession = true
                         updateSessionCode(code)
                         updateStatus("Session: $code")
                         updateMapHint("Share this code: $code")
@@ -554,6 +858,49 @@ class MainActivity : AppCompatActivity() {
                 override fun onParticipantLeft(uid: String) {
                     runOnUiThread {
                         ToastMessage("A participant left the session")
+                    }
+                }
+
+                override fun onParticipantsChanged(
+                    participants: List<SessionParticipant>
+                ) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+
+                        if (participants.isNotEmpty()) {
+                            hasActiveSession =
+                                activeSessionCode.isNotBlank()
+                        } else if (activeSessionCode.isBlank()) {
+                            hasActiveSession = false
+                        }
+
+                        updateParticipants(participants)
+                    }
+                }
+
+                override fun onSessionClosed() {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+
+                        hasActiveSession = false
+
+                        updateSessionCode("")
+                        updateParticipants(emptyList())
+                        updateStatus("Host closed the session")
+                        updateMapHint("Session closed")
+
+                        ToastMessage("Host closed the session")
+
+                        val intent = Intent(
+                            this@MainActivity,
+                            HomeActivity::class.java
+                        ).apply {
+                            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        }
+
+                        startActivity(intent)
+                        finish()
                     }
                 }
 
@@ -658,19 +1005,17 @@ class MainActivity : AppCompatActivity() {
                         val info = lastMapInfo
                         val objects = lastMapObjects
 
-                        if (
-                            info != null &&
-                            objects != null &&
-                            info.optBoolean("valid", false)
-                        ) {
+                        if (info != null && objects != null) {
+                            Log.d(
+                                TAG,
+                                "Sending current map to new participant: $uid"
+                            )
+
                             multiplayer.sendMap(
                                 JSONObject(info.toString()),
                                 JSONObject(objects.toString()),
-                                lastMapImage?.copyOf()
-                            )
-
-                            multiplayer.sendObjects(
-                                JSONObject(objects.toString())
+                                lastMapImage?.copyOf(),
+                                uid
                             )
                         }
 
@@ -683,6 +1028,8 @@ class MainActivity : AppCompatActivity() {
 
                 override fun onError(message: String) {
                     runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+
                         updateStatus(message)
                         ToastMessage(message)
                     }
@@ -818,6 +1165,9 @@ class MainActivity : AppCompatActivity() {
                     lastMapObjects = null
                     lastMapImage = null
 
+                    lastSentMapKey = ""
+                    lastSentObjectsJson = ""
+
                     updateStatus("Connected: ${device.name}")
                     updateMapHint("Waiting for a battle...")
                 }
@@ -871,7 +1221,9 @@ class MainActivity : AppCompatActivity() {
 
         isLoading = false
         isDiscovering = false
+
         lastSentMapKey = ""
+        lastSentObjectsJson = ""
 
         lastMapInfo = null
         lastMapObjects = null
@@ -913,6 +1265,16 @@ class MainActivity : AppCompatActivity() {
                     return@runOnUiThread
                 }
 
+                val generation = data.info.optInt(
+                    "map_generation",
+                    -1
+                )
+
+                val hudType = data.info.optInt(
+                    "hud_type",
+                    -1
+                )
+
                 if (!data.info.optBoolean("valid", false)) {
                     lastMapInfo = JSONObject(data.info.toString())
                     lastMapObjects = JSONObject()
@@ -922,11 +1284,19 @@ class MainActivity : AppCompatActivity() {
                         clearMap()
                     }
 
-                    multiplayer.sendMap(
-                        data.info,
-                        JSONObject(),
-                        null
-                    )
+                    val invalidMapKey =
+                        "invalid:$generation:$hudType"
+
+                    if (lastSentMapKey != invalidMapKey) {
+                        multiplayer.sendMap(
+                            data.info,
+                            JSONObject(),
+                            null
+                        )
+
+                        lastSentMapKey = invalidMapKey
+                        lastSentObjectsJson = "{}"
+                    }
 
                     updateMapHint("Waiting for a battle...")
                     updateStatus(
@@ -938,9 +1308,6 @@ class MainActivity : AppCompatActivity() {
 
                 lastMapInfo = JSONObject(data.info.toString())
                 lastMapObjects = JSONObject(data.objects.toString())
-
-                val generation = data.info.optInt("map_generation", -1)
-                val hudType = data.info.optInt("hud_type", -1)
 
                 val newDrawingKey = drawingManager.createMapKey(
                     "shared",
@@ -981,13 +1348,17 @@ class MainActivity : AppCompatActivity() {
 
                             lastMapImage = data.image.copyOf()
 
-                            multiplayer.sendMap(
-                                data.info,
-                                data.objects,
-                                data.image
-                            )
+                            if (lastSentMapKey != mapKey) {
+                                multiplayer.sendMap(
+                                    data.info,
+                                    data.objects,
+                                    data.image
+                                )
 
-                            lastSentMapKey = mapKey
+                                lastSentMapKey = mapKey
+                                lastSentObjectsJson =
+                                    data.objects.toString()
+                            }
                         }
                     } else if (lastMapImage == null) {
                         lastMapImage = data.image.copyOf()
@@ -1005,7 +1376,12 @@ class MainActivity : AppCompatActivity() {
                 drawingToolbar.updateButtons()
                 mapOverlay.invalidate()
 
-                multiplayer.sendObjects(data.objects)
+                val objectsJson = data.objects.toString()
+
+                if (objectsJson != lastSentObjectsJson) {
+                    lastSentObjectsJson = objectsJson
+                    multiplayer.sendObjects(data.objects)
+                }
 
                 updateMapHint(
                     if (currentBitmap != null) "" else "Loading map..."

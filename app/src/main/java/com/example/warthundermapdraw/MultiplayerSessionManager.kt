@@ -9,6 +9,8 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.MutableData
+import com.google.firebase.database.Transaction
 import com.google.firebase.database.ValueEventListener
 import org.json.JSONObject
 import org.webrtc.DataChannel
@@ -24,6 +26,13 @@ import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicReference
+
+data class SessionParticipant(
+    val uid: String,
+    val name: String,
+    val isHost: Boolean
+)
 
 class MultiplayerSessionManager(
     private val context: Context,
@@ -35,6 +44,12 @@ class MultiplayerSessionManager(
         fun onSessionCreated(code: String)
         fun onParticipantJoined(name: String)
         fun onParticipantLeft(uid: String)
+
+        fun onParticipantsChanged(
+            participants: List<SessionParticipant>
+        ) {}
+
+        fun onSessionClosed() {}
 
         fun onMapReceived(
             info: JSONObject,
@@ -71,6 +86,8 @@ class MultiplayerSessionManager(
     private var factory: PeerConnectionFactory? = null
     private var roomRef: DatabaseReference? = null
     private var membersListener: ChildEventListener? = null
+    private var participantsListener: ValueEventListener? = null
+    private var activeSessionListener: ValueEventListener? = null
 
     private val peers =
         ConcurrentHashMap<String, PeerConnection>()
@@ -147,9 +164,11 @@ class MultiplayerSessionManager(
                 onReady(true)
             } catch (e: Exception) {
                 Log.e(TAG, "WebRTC initialization failed", e)
+
                 listener.onError(
                     "WebRTC initialization failed: ${e.message}"
                 )
+
                 onReady(false)
             }
 
@@ -214,6 +233,10 @@ class MultiplayerSessionManager(
             return
         }
 
+        if (sessionCode != null) {
+            leaveSession()
+        }
+
         isHost = true
         isClosed = false
 
@@ -231,6 +254,8 @@ class MultiplayerSessionManager(
             return
         }
 
+        val uid = localUid ?: return
+
         val code = "WT-" + UUID.randomUUID()
             .toString()
             .replace("-", "")
@@ -242,32 +267,30 @@ class MultiplayerSessionManager(
             .child(code)
 
         ref.runTransaction(
-            object : com.google.firebase.database.Transaction.Handler {
+            object : Transaction.Handler {
 
                 override fun doTransaction(
-                    currentData: com.google.firebase.database.MutableData
-                ): com.google.firebase.database.Transaction.Result {
+                    currentData: MutableData
+                ): Transaction.Result {
 
                     if (currentData.value != null) {
-                        return com.google.firebase.database.Transaction.abort()
+                        return Transaction.abort()
                     }
 
                     currentData.value = mapOf(
-                        "host" to localUid,
+                        "host" to uid,
                         "hostName" to username,
                         "createdAt" to System.currentTimeMillis(),
                         "active" to true,
                         "members" to mapOf(
-                            localUid!! to mapOf(
+                            uid to mapOf(
                                 "name" to username,
                                 "host" to true
                             )
                         )
                     )
 
-                    return com.google.firebase.database.Transaction.success(
-                        currentData
-                    )
+                    return Transaction.success(currentData)
                 }
 
                 override fun onComplete(
@@ -295,10 +318,12 @@ class MultiplayerSessionManager(
 
                     sessionCode = code
                     roomRef = ref
+                    isClosed = false
 
                     Log.d(TAG, "Session created: $code")
 
                     listenForMembers()
+                    listenForParticipants()
 
                     listener.onSessionCreated(code)
 
@@ -319,6 +344,11 @@ class MultiplayerSessionManager(
             return
         }
 
+        if (sessionCode != null) {
+            listener.onError("You are already in a session")
+            return
+        }
+
         val code = codeInput.trim().uppercase()
 
         if (!code.matches(Regex("WT-[A-Z0-9]{6}"))) {
@@ -326,77 +356,250 @@ class MultiplayerSessionManager(
             return
         }
 
-        isHost = false
-        isClosed = false
+        val uid = localUid
+            ?: run {
+                listener.onError("Firebase authentication is missing")
+                return
+            }
 
         val ref = database
             .child("rooms")
             .child(code)
 
-        ref.get()
-            .addOnSuccessListener { snapshot ->
+        val rejectionReason = AtomicReference<String?>(
+            "Session does not exist"
+        )
 
-                if (
-                    !snapshot.exists() ||
-                    snapshot.child("active")
-                        .getValue(Boolean::class.java) != true
-                ) {
-                    listener.onError(
-                        "Session not found or already closed"
-                    )
-                    return@addOnSuccessListener
-                }
+        listener.onStatus("Checking session...")
 
-                val members =
-                    snapshot.child("members").childrenCount
+        ref.runTransaction(
+            object : Transaction.Handler {
 
-                if (members >= MAX_PARTICIPANTS) {
-                    listener.onError("Session is full")
-                    return@addOnSuccessListener
-                }
+                override fun doTransaction(
+                    currentData: MutableData
+                ): Transaction.Result {
 
-                sessionCode = code
-                roomRef = ref
+                    rejectionReason.set("Session does not exist")
 
-                val uid = localUid
-                    ?: return@addOnSuccessListener
-
-                ref.child("members")
-                    .child(uid)
-                    .setValue(
-                        mapOf(
-                            "name" to username,
-                            "host" to false
-                        )
-                    )
-                    .addOnSuccessListener {
-
-                        Log.d(
-                            TAG,
-                            "Joined session $code as $uid"
-                        )
-
-                        listener.onStatus("Joining session...")
-
-                        listenForHostOffer()
+                    if (currentData.value == null) {
+                        return Transaction.abort()
                     }
-                    .addOnFailureListener { error ->
 
-                        Log.e(TAG, "Could not join session", error)
+                    val hostUid = currentData
+                        .child("host")
+                        .value as? String
+
+                    if (hostUid.isNullOrBlank()) {
+                        rejectionReason.set(
+                            "Invalid session: host not found"
+                        )
+                        return Transaction.abort()
+                    }
+
+                    val active = currentData
+                        .child("active")
+                        .value as? Boolean
+
+                    if (active != true) {
+                        rejectionReason.set(
+                            "Session is closed"
+                        )
+                        return Transaction.abort()
+                    }
+
+                    val membersData = currentData.child("members")
+
+                    if (!membersData.hasChild(hostUid)) {
+                        rejectionReason.set(
+                            "Invalid session: host is not a member"
+                        )
+                        return Transaction.abort()
+                    }
+
+                    val alreadyMember = membersData.hasChild(uid)
+
+                    if (
+                        membersData.childrenCount >= MAX_PARTICIPANTS &&
+                        !alreadyMember
+                    ) {
+                        rejectionReason.set("Session is full")
+                        return Transaction.abort()
+                    }
+
+                    membersData
+                        .child(uid)
+                        .value = mapOf(
+                        "name" to username,
+                        "host" to false
+                    )
+
+                    rejectionReason.set(null)
+
+                    return Transaction.success(currentData)
+                }
+
+                override fun onComplete(
+                    error: DatabaseError?,
+                    committed: Boolean,
+                    snapshot: DataSnapshot?
+                ) {
+                    if (error != null) {
+                        Log.e(
+                            TAG,
+                            "Session join transaction failed",
+                            error.toException()
+                        )
 
                         listener.onError(
                             "Could not join session: ${error.message}"
                         )
+                        return
                     }
+
+                    if (!committed) {
+                        val reason = rejectionReason.get()
+                            ?: "Session not found or already closed"
+
+                        Log.w(
+                            TAG,
+                            "Join rejected for $code: $reason"
+                        )
+
+                        listener.onError(reason)
+                        return
+                    }
+
+                    val confirmedActive = snapshot
+                        ?.child("active")
+                        ?.getValue(Boolean::class.java) == true
+
+                    val confirmedHost = snapshot
+                        ?.child("host")
+                        ?.getValue(String::class.java)
+
+                    if (!confirmedActive || confirmedHost.isNullOrBlank()) {
+                        ref.child("members")
+                            .child(uid)
+                            .removeValue()
+
+                        listener.onError(
+                            "Session is no longer available"
+                        )
+                        return
+                    }
+
+                    if (isClosed) {
+                        ref.child("members")
+                            .child(uid)
+                            .removeValue()
+                        return
+                    }
+
+                    sessionCode = code
+                    roomRef = ref
+                    isHost = false
+
+                    Log.d(
+                        TAG,
+                        "Joined session $code as $uid"
+                    )
+
+                    listener.onStatus("Joining session...")
+
+                    listenForParticipants()
+                    listenForSessionState()
+                    listenForHostOffer()
+                }
+            },
+            false
+        )
+    }
+
+    private fun listenForParticipants() {
+        val ref = roomRef?.child("members") ?: return
+
+        participantsListener?.let {
+            ref.removeEventListener(it)
+        }
+
+        val valueListener = object : ValueEventListener {
+
+            override fun onDataChange(snapshot: DataSnapshot) {
+                if (isClosed) return
+
+                val participants = snapshot.children.mapNotNull { child ->
+                    val uid = child.key ?: return@mapNotNull null
+
+                    val name = child.child("name")
+                        .getValue(String::class.java)
+                        ?: "Player"
+
+                    val host = child.child("host")
+                        .getValue(Boolean::class.java)
+                        ?: false
+
+                    SessionParticipant(
+                        uid = uid,
+                        name = name,
+                        isHost = host
+                    )
+                }.sortedWith(
+                    compareByDescending<SessionParticipant> { it.isHost }
+                        .thenBy { it.name.lowercase() }
+                )
+
+                listener.onParticipantsChanged(participants)
             }
-            .addOnFailureListener { error ->
 
-                Log.e(TAG, "Could not find session", error)
-
-                listener.onError(
-                    "Could not find session: ${error.message}"
+            override fun onCancelled(error: DatabaseError) {
+                Log.e(
+                    TAG,
+                    "Participants listener cancelled",
+                    error.toException()
                 )
             }
+        }
+
+        participantsListener = valueListener
+        ref.addValueEventListener(valueListener)
+    }
+
+    private fun listenForSessionState() {
+        val ref = roomRef?.child("active") ?: return
+
+        activeSessionListener?.let {
+            ref.removeEventListener(it)
+        }
+
+        val valueListener = object : ValueEventListener {
+
+            override fun onDataChange(snapshot: DataSnapshot) {
+                if (isClosed || isHost) return
+
+                val active = snapshot.getValue(Boolean::class.java)
+                    ?: false
+
+                if (!active) {
+                    Log.d(TAG, "Host closed the session")
+
+                    leaveSession()
+
+                    listener.onStatus("Host closed the session")
+                    listener.onSessionClosed()
+                }
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                Log.e(
+                    TAG,
+                    "Session state listener cancelled",
+                    error.toException()
+                )
+            }
+        }
+
+        activeSessionListener = valueListener
+        ref.addValueEventListener(valueListener)
     }
 
     private fun listenForMembers() {
@@ -677,12 +880,16 @@ class MultiplayerSessionManager(
                 override fun onCreateSuccess(
                     description: SessionDescription
                 ) {
+                    if (isClosed) return
+
                     Log.d(TAG, "[$uid] Offer created")
 
                     peer.setLocalDescription(
                         object : SdpObserverAdapter() {
 
                             override fun onSetSuccess() {
+                                if (isClosed) return
+
                                 Log.d(
                                     TAG,
                                     "[$uid] Local offer successfully set"
@@ -714,6 +921,8 @@ class MultiplayerSessionManager(
                                     )
                                 )
                                     .addOnSuccessListener {
+                                        if (isClosed) return@addOnSuccessListener
+
                                         Log.d(
                                             TAG,
                                             "[$uid] Offer sent to Firebase"
@@ -928,6 +1137,8 @@ class MultiplayerSessionManager(
                                     override fun onCreateSuccess(
                                         description: SessionDescription
                                     ) {
+                                        if (isClosed) return
+
                                         Log.d(
                                             TAG,
                                             "[host] Answer created"
@@ -937,6 +1148,8 @@ class MultiplayerSessionManager(
                                             object : SdpObserverAdapter() {
 
                                                 override fun onSetSuccess() {
+                                                    if (isClosed) return
+
                                                     Log.d(
                                                         TAG,
                                                         "[host] Local answer successfully set"
@@ -950,6 +1163,8 @@ class MultiplayerSessionManager(
                                                             )
                                                         )
                                                         .addOnSuccessListener {
+
+                                                            if (isClosed) return@addOnSuccessListener
 
                                                             Log.d(
                                                                 TAG,
@@ -1097,9 +1312,11 @@ class MultiplayerSessionManager(
                     error
                 )
 
-                listener.onError(
-                    "Could not send ICE candidate: ${error.message}"
-                )
+                if (!isClosed) {
+                    listener.onError(
+                        "Could not send ICE candidate: ${error.message}"
+                    )
+                }
             }
     }
 
@@ -1244,9 +1461,11 @@ class MultiplayerSessionManager(
                     error.toException()
                 )
 
-                listener.onError(
-                    "ICE listener error: ${error.message}"
-                )
+                if (!isClosed) {
+                    listener.onError(
+                        "ICE listener error: ${error.message}"
+                    )
+                }
             }
         }
 
@@ -1339,6 +1558,10 @@ class MultiplayerSessionManager(
                 }
             }
         )
+
+        if (channel.state() == DataChannel.State.OPEN) {
+            listener.onDrawingChannelReady(uid)
+        }
     }
 
     private fun enqueueMessage(
@@ -1601,7 +1824,8 @@ class MultiplayerSessionManager(
     fun sendMap(
         info: JSONObject,
         objects: JSONObject,
-        image: ByteArray?
+        image: ByteArray?,
+        targetUid: String? = null
     ) {
         if (!isHost || isClosed) return
 
@@ -1623,7 +1847,21 @@ class MultiplayerSessionManager(
             .put("objects", objects.toString())
             .put("total", chunks.size)
 
-        broadcast(start.toString())
+        val destination = targetUid
+
+        if (destination != null) {
+            if (!channels.containsKey(destination)) {
+                Log.w(
+                    TAG,
+                    "[$destination] Cannot send map. DataChannel missing."
+                )
+                return
+            }
+
+            enqueueMessage(destination, start.toString())
+        } else {
+            broadcast(start.toString())
+        }
 
         chunks.forEachIndexed { index, chunk ->
 
@@ -1632,32 +1870,48 @@ class MultiplayerSessionManager(
                 .put("id", id)
                 .put("index", index)
                 .put("data", chunk)
+                .toString()
 
-            broadcast(message.toString())
+            if (destination != null) {
+                enqueueMessage(destination, message)
+            } else {
+                broadcast(message)
+            }
         }
 
-        broadcast(
-            JSONObject()
-                .put("type", "mapEnd")
-                .put("id", id)
-                .toString()
-        )
+        val end = JSONObject()
+            .put("type", "mapEnd")
+            .put("id", id)
+            .toString()
+
+        if (destination != null) {
+            enqueueMessage(destination, end)
+        } else {
+            broadcast(end)
+        }
 
         Log.d(
             TAG,
-            "Map queued. ID: $id, chunks: ${chunks.size}, bytes: ${imageBytes.size}"
+            "Map queued. ID: $id, target: ${destination ?: "all"}, chunks: ${chunks.size}, bytes: ${imageBytes.size}"
         )
     }
 
-    fun sendObjects(objects: JSONObject) {
+    fun sendObjects(
+        objects: JSONObject,
+        targetUid: String? = null
+    ) {
         if (!isHost || isClosed) return
 
-        broadcast(
-            JSONObject()
-                .put("type", "objects")
-                .put("data", objects.toString())
-                .toString()
-        )
+        val message = JSONObject()
+            .put("type", "objects")
+            .put("data", objects.toString())
+            .toString()
+
+        if (targetUid != null) {
+            enqueueMessage(targetUid, message)
+        } else {
+            broadcast(message)
+        }
     }
 
     private fun broadcast(message: String) {
@@ -1748,35 +2002,27 @@ class MultiplayerSessionManager(
         }
     }
 
-    fun leaveSession() {
-        if (isClosed) return
-
-        isClosed = true
-
-        Log.d(TAG, "Leaving multiplayer session")
-
-        val uid = localUid
+    private fun cleanupLocalSession() {
         val ref = roomRef
-
-        if (isHost) {
-
-            ref?.child("active")?.setValue(false)
-
-            ref?.child("members")?.removeValue()
-
-        } else if (uid != null) {
-
-            ref?.child("members")
-                ?.child(uid)
-                ?.removeValue()
-        }
 
         membersListener?.let { memberListener ->
             ref?.child("members")
                 ?.removeEventListener(memberListener)
         }
 
+        participantsListener?.let { participantListener ->
+            ref?.child("members")
+                ?.removeEventListener(participantListener)
+        }
+
+        activeSessionListener?.let { stateListener ->
+            ref?.child("active")
+                ?.removeEventListener(stateListener)
+        }
+
         membersListener = null
+        participantsListener = null
+        activeSessionListener = null
 
         peerListeners.keys.toList().forEach {
             removePeerListeners(it)
@@ -1787,10 +2033,11 @@ class MultiplayerSessionManager(
         }
 
         peers.keys.toList().forEach { peerUid ->
+            closePeer(peerUid)
+        }
 
-            outgoingQueues.remove(peerUid)?.clear()
-
-            channels.remove(peerUid)?.let { channel ->
+        channels.keys.toList().forEach { uid ->
+            channels.remove(uid)?.let { channel ->
                 try {
                     channel.unregisterObserver()
                     channel.close()
@@ -1798,20 +2045,7 @@ class MultiplayerSessionManager(
                 } catch (e: Exception) {
                     Log.e(
                         TAG,
-                        "Error disposing channel $peerUid",
-                        e
-                    )
-                }
-            }
-
-            peers.remove(peerUid)?.let { peer ->
-                try {
-                    peer.close()
-                    peer.dispose()
-                } catch (e: Exception) {
-                    Log.e(
-                        TAG,
-                        "Error disposing peer $peerUid",
+                        "Error disposing channel $uid",
                         e
                     )
                 }
@@ -1832,11 +2066,81 @@ class MultiplayerSessionManager(
 
         sessionCode = null
         roomRef = null
-        membersListener = null
 
         isHost = false
 
+        listener.onParticipantsChanged(emptyList())
         listener.onStatus("Disconnected")
+    }
+
+    fun leaveSession(
+        onComplete: ((Boolean, String?) -> Unit)? = null
+    ) {
+        if (isClosed) {
+            onComplete?.invoke(true, null)
+            return
+        }
+
+        isClosed = true
+
+        Log.d(TAG, "Leaving multiplayer session")
+
+        val uid = localUid
+        val ref = roomRef
+        val wasHost = isHost
+
+        val leaveTask = when {
+            ref == null -> null
+
+            wasHost -> {
+                ref.updateChildren(
+                    mapOf(
+                        "active" to false,
+                        "members" to null,
+                        "signals" to null
+                    )
+                )
+            }
+
+            uid != null -> {
+                ref.updateChildren(
+                    mapOf(
+                        "members/$uid" to null,
+                        "signals/$uid" to null
+                    )
+                )
+            }
+
+            else -> null
+        }
+
+        cleanupLocalSession()
+
+        if (leaveTask == null) {
+            onComplete?.invoke(
+                ref == null,
+                if (ref == null) null else "Could not access session"
+            )
+            return
+        }
+
+        leaveTask
+            .addOnSuccessListener {
+                Log.d(TAG, "Firebase session leave completed")
+                onComplete?.invoke(true, null)
+            }
+            .addOnFailureListener { error ->
+                Log.e(
+                    TAG,
+                    "Firebase session leave failed",
+                    error
+                )
+
+                onComplete?.invoke(
+                    false,
+                    error.message ?: "Firebase error"
+                )
+            }
     }
 
     fun shutdown() {
