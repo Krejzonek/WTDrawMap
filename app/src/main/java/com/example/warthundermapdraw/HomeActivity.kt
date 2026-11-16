@@ -11,6 +11,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.google.firebase.database.FirebaseDatabase
 import kotlin.random.Random
 
 class HomeActivity : AppCompatActivity() {
@@ -19,11 +20,16 @@ class HomeActivity : AppCompatActivity() {
         private const val PREFS_NAME = "WarThunderPreferences"
         private const val KEY_USERNAME = "username"
         private const val DEFAULT_USERNAME = "User"
+        private const val DATABASE_URL =
+            "https://wt-tactical-map-5f0fb-default-rtdb.europe-west1.firebasedatabase.app/"
     }
 
     private lateinit var usernameButton: TextView
     private lateinit var createSessionButton: Button
     private lateinit var joinSessionButton: Button
+
+    private val database =
+        FirebaseDatabase.getInstance(DATABASE_URL).reference
 
     private var username: String = DEFAULT_USERNAME
 
@@ -205,32 +211,92 @@ class HomeActivity : AppCompatActivity() {
             .create()
 
         dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-                .setOnClickListener {
-                    val code = input.text.toString()
-                        .trim()
-                        .uppercase()
+            val joinButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
 
-                    if (!code.matches(Regex("WT-[A-Z0-9]{6}"))) {
-                        input.error = "Enter a valid code, e.g. WT-82K4P6"
-                        return@setOnClickListener
-                    }
+            joinButton.setOnClickListener {
+                val code = input.text.toString()
+                    .trim()
+                    .uppercase()
 
-                    dialog.dismiss()
-
-                    val intent = Intent(
-                        this,
-                        MainActivity::class.java
-                    )
-
-                    intent.putExtra("SESSION_HOST", false)
-                    intent.putExtra("SESSION_CODE", code)
-                    intent.putExtra("USERNAME", username)
-
-                    startActivity(intent)
+                if (!code.matches(Regex("WT-[A-Z0-9]{6}"))) {
+                    input.error = "Enter a valid code, e.g. WT-82K4P6"
+                    return@setOnClickListener
                 }
+
+                joinButton.isEnabled = false
+                joinButton.text = "CHECKING..."
+
+                checkSessionExists(
+                    code = code,
+                    onSuccess = {
+                        if (isFinishing || isDestroyed) return@checkSessionExists
+
+                        dialog.dismiss()
+
+                        val intent = Intent(
+                            this,
+                            MainActivity::class.java
+                        )
+
+                        intent.putExtra("SESSION_HOST", false)
+                        intent.putExtra("SESSION_CODE", code)
+                        intent.putExtra("USERNAME", username)
+
+                        startActivity(intent)
+                    },
+                    onFailure = { message ->
+                        if (isFinishing || isDestroyed) return@checkSessionExists
+
+                        joinButton.isEnabled = true
+                        joinButton.text = "JOIN"
+
+                        input.error = message
+
+                        Toast.makeText(
+                            this,
+                            message,
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                )
+            }
         }
 
         dialog.show()
+    }
+
+    private fun checkSessionExists(
+        code: String,
+        onSuccess: () -> Unit,
+        onFailure: (String) -> Unit
+    ) {
+        database.child("rooms")
+            .child(code)
+            .get()
+            .addOnSuccessListener { snapshot ->
+
+                if (!snapshot.exists()) {
+                    onFailure("Session does not exist")
+                    return@addOnSuccessListener
+                }
+
+                val active = snapshot.child("active")
+                    .getValue(Boolean::class.java) ?: false
+
+                val host = snapshot.child("host")
+                    .getValue(String::class.java)
+
+                if (!active || host.isNullOrBlank()) {
+                    onFailure("Session does not exist or is already closed")
+                    return@addOnSuccessListener
+                }
+
+                onSuccess()
+            }
+            .addOnFailureListener { error ->
+                onFailure(
+                    "Could not verify session: ${error.message ?: "Firebase error"}"
+                )
+            }
     }
 }
