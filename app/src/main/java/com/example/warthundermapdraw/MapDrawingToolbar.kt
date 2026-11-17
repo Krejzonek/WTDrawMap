@@ -40,6 +40,8 @@ class MapDrawingToolbar(
     private lateinit var brushSizeSeekBar: SeekBar
     private lateinit var brushSizeLabel: TextView
 
+    private var drawingAllowed = true
+
     private val colors = listOf(
         Color.RED,
         Color.rgb(255, 140, 0),
@@ -265,6 +267,8 @@ class MapDrawingToolbar(
                         progress: Int,
                         fromUser: Boolean
                     ) {
+                        if (!drawingAllowed) return
+
                         val size = (progress + 1).toFloat()
                         drawingManager.brushSizeDp = size
                         brushSizeLabel.text = "${size.toInt()} dp"
@@ -366,8 +370,12 @@ class MapDrawingToolbar(
                 }
 
                 contentDescription = "Drawing color"
+                isEnabled = drawingAllowed
+                alpha = if (drawingAllowed) 1f else 0.35f
 
                 setOnClickListener {
+                    if (!drawingAllowed) return@setOnClickListener
+
                     drawingManager.currentColor = color
                     drawingManager.activeTool = MapDrawingManager.Tool.PENCIL
 
@@ -388,6 +396,8 @@ class MapDrawingToolbar(
 
     private fun setupListeners() {
         drawButton.setOnClickListener {
+            if (!drawingAllowed) return@setOnClickListener
+
             val show = toolbar.visibility != View.VISIBLE
 
             toolbar.visibility = if (show) View.VISIBLE else View.GONE
@@ -404,6 +414,8 @@ class MapDrawingToolbar(
         }
 
         pencilButton.setOnClickListener {
+            if (!drawingAllowed) return@setOnClickListener
+
             drawingManager.activeTool = MapDrawingManager.Tool.PENCIL
 
             palette.visibility =
@@ -417,18 +429,24 @@ class MapDrawingToolbar(
         }
 
         eraserButton.setOnClickListener {
+            if (!drawingAllowed) return@setOnClickListener
+
             drawingManager.activeTool = MapDrawingManager.Tool.ERASER
             palette.visibility = View.GONE
             updateButtons()
         }
 
         undoButton.setOnClickListener {
+            if (!drawingAllowed) return@setOnClickListener
+
             drawingManager.undo()
             updateButtons()
             onInvalidate()
         }
 
         redoButton.setOnClickListener {
+            if (!drawingAllowed) return@setOnClickListener
+
             drawingManager.redo()
             updateButtons()
             onInvalidate()
@@ -439,22 +457,59 @@ class MapDrawingToolbar(
         }
     }
 
+    /**
+     * Wywołuj po zmianie uprawnienia użytkownika.
+     */
+    fun setDrawingAllowed(allowed: Boolean) {
+        drawingAllowed = allowed
+        drawingManager.setDrawingPermission(allowed)
+
+        if (!allowed) {
+            closeDrawingTools()
+        }
+
+        drawButton.isEnabled = allowed
+        drawButton.alpha = if (allowed) 1f else 0.4f
+
+        brushSizeSeekBar.isEnabled = allowed
+        brushSizeLabel.alpha = if (allowed) 1f else 0.4f
+
+        createPalette()
+        updateButtons()
+        onInvalidate()
+    }
+
     fun updateButtons() {
         val activeColor = Color.rgb(40, 95, 145)
         val normalColor = Color.rgb(17, 26, 39)
 
+        pencilButton.isEnabled = drawingAllowed
+        eraserButton.isEnabled = drawingAllowed
+        undoButton.isEnabled = drawingAllowed && drawingManager.canUndo
+        redoButton.isEnabled = drawingAllowed && drawingManager.canRedo
+
+        pencilButton.alpha = if (drawingAllowed) 1f else 0.35f
+        eraserButton.alpha = if (drawingAllowed) 1f else 0.35f
+
         pencilButton.setBackgroundColor(
-            if (drawingManager.activeTool == MapDrawingManager.Tool.PENCIL)
-                activeColor else normalColor
+            if (
+                drawingAllowed &&
+                drawingManager.activeTool == MapDrawingManager.Tool.PENCIL
+            ) activeColor else normalColor
         )
 
         eraserButton.setBackgroundColor(
-            if (drawingManager.activeTool == MapDrawingManager.Tool.ERASER)
-                activeColor else normalColor
+            if (
+                drawingAllowed &&
+                drawingManager.activeTool == MapDrawingManager.Tool.ERASER
+            ) activeColor else normalColor
         )
 
-        undoButton.alpha = if (drawingManager.canUndo) 1f else 0.4f
-        redoButton.alpha = if (drawingManager.canRedo) 1f else 0.4f
+        undoButton.alpha =
+            if (drawingManager.canUndo) 1f else 0.4f
+
+        redoButton.alpha =
+            if (drawingManager.canRedo) 1f else 0.4f
     }
 
     fun setExportVisible(visible: Boolean) {

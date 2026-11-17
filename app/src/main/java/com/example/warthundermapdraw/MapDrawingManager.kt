@@ -8,10 +8,10 @@ import android.graphics.PointF
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
+import android.graphics.PathMeasure
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
-import android.graphics.PathMeasure
 import kotlin.math.max
 import kotlin.math.min
 
@@ -67,22 +67,45 @@ class MapDrawingManager(
     private var localUid = "local"
     private var localName = ""
 
+    var canDraw: Boolean = true
+        private set
+
     private val currentLayer: DrawingLayer
         get() = layers.getOrPut(currentKey) {
             DrawingLayer()
         }
 
     val canUndo: Boolean
-        get() = currentLayer.strokes.any {
+        get() = canDraw && currentLayer.strokes.any {
             it.authorUid == localUid
         }
 
     val canRedo: Boolean
-        get() = currentLayer.redo[localUid]?.isNotEmpty() == true
+        get() = canDraw &&
+                currentLayer.redo[localUid]?.isNotEmpty() == true
 
     fun setLocalAuthor(uid: String, name: String) {
         localUid = uid.ifBlank { "local" }
         localName = name.trim()
+    }
+
+    fun setDrawingPermission(allowed: Boolean) {
+        if (canDraw == allowed) return
+
+        canDraw = allowed
+
+        if (!allowed) {
+            activeStroke?.let { stroke ->
+                currentLayer.strokes.removeAll {
+                    it.id == stroke.id
+                }
+            }
+
+            activeStroke = null
+            activeTool = Tool.NONE
+        }
+
+        onDrawingChanged?.invoke()
     }
 
     fun switchLayer(key: String): Boolean {
@@ -128,6 +151,7 @@ class MapDrawingManager(
         normalizedX: Float,
         normalizedY: Float
     ) {
+        if (!canDraw) return
         if (activeTool == Tool.NONE) return
 
         val stroke = Stroke(
@@ -155,6 +179,8 @@ class MapDrawingManager(
         normalizedX: Float,
         normalizedY: Float
     ) {
+        if (!canDraw) return
+
         val stroke = activeStroke ?: return
 
         stroke.points.add(
@@ -168,6 +194,11 @@ class MapDrawingManager(
     }
 
     fun finishStroke() {
+        if (!canDraw) {
+            activeStroke = null
+            return
+        }
+
         val stroke = activeStroke ?: return
         activeStroke = null
 
@@ -180,6 +211,8 @@ class MapDrawingManager(
     }
 
     fun undo() {
+        if (!canDraw) return
+
         val index = currentLayer.strokes.indexOfLast {
             it.authorUid == localUid
         }
@@ -208,6 +241,8 @@ class MapDrawingManager(
     }
 
     fun redo() {
+        if (!canDraw) return
+
         val redoList = currentLayer.redo[localUid] ?: return
         if (redoList.isEmpty()) return
 
@@ -233,6 +268,37 @@ class MapDrawingManager(
         onDrawingChanged?.invoke()
     }
 
+    fun clearUserDrawings(uid: String) {
+        if (uid.isBlank()) return
+
+        var changed = false
+
+        layers.values.forEach { layer ->
+            val removedStrokes = layer.strokes.removeAll {
+                it.authorUid == uid
+            }
+
+            if (removedStrokes) {
+                changed = true
+            }
+
+            val removedRedo = layer.redo.remove(uid) != null
+
+            if (removedRedo) {
+                changed = true
+            }
+        }
+
+        if (activeStroke?.authorUid == uid) {
+            activeStroke = null
+            changed = true
+        }
+
+        if (changed) {
+            onDrawingChanged?.invoke()
+        }
+    }
+
     fun getLegendEntries(): List<LegendEntry> {
         val usedColors = currentLayer.strokes
             .filter { !it.isEraser }
@@ -252,6 +318,8 @@ class MapDrawingManager(
         color: Int,
         description: String
     ) {
+        if (!canDraw) return
+
         val cleanDescription = description.trim()
         currentLayer.legendDescriptions[color] = cleanDescription
 
@@ -313,6 +381,7 @@ class MapDrawingManager(
             "drawingUndo" -> applyRemoteUndo(message)
             "drawingRedo" -> applyRemoteRedo(message)
             "drawingLegend" -> applyRemoteLegend(message)
+            "drawingClearUser" -> clearUserDrawings(message.optString("uid"))
         }
     }
 

@@ -11,6 +11,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.FirebaseDatabase
 import kotlin.random.Random
 
@@ -27,6 +28,8 @@ class HomeActivity : AppCompatActivity() {
     private lateinit var usernameButton: TextView
     private lateinit var createSessionButton: Button
     private lateinit var joinSessionButton: Button
+
+    private val auth = FirebaseAuth.getInstance()
 
     private val database =
         FirebaseDatabase.getInstance(DATABASE_URL).reference
@@ -270,33 +273,60 @@ class HomeActivity : AppCompatActivity() {
         onSuccess: () -> Unit,
         onFailure: (String) -> Unit
     ) {
-        database.child("rooms")
-            .child(code)
-            .get()
-            .addOnSuccessListener { snapshot ->
+        fun checkWithAuthenticatedUser() {
+            val uid = auth.currentUser?.uid
 
-                if (!snapshot.exists()) {
-                    onFailure("Session does not exist")
-                    return@addOnSuccessListener
-                }
-
-                val active = snapshot.child("active")
-                    .getValue(Boolean::class.java) ?: false
-
-                val host = snapshot.child("host")
-                    .getValue(String::class.java)
-
-                if (!active || host.isNullOrBlank()) {
-                    onFailure("Session does not exist or is already closed")
-                    return@addOnSuccessListener
-                }
-
-                onSuccess()
+            if (uid.isNullOrBlank()) {
+                onFailure("Could not authenticate user")
+                return
             }
-            .addOnFailureListener { error ->
-                onFailure(
-                    "Could not verify session: ${error.message ?: "Firebase error"}"
-                )
-            }
+
+            database.child("rooms")
+                .child(code)
+                .get()
+                .addOnSuccessListener { snapshot ->
+                    if (!snapshot.exists()) {
+                        onFailure("Session does not exist")
+                        return@addOnSuccessListener
+                    }
+
+                    val active = snapshot.child("active")
+                        .getValue(Boolean::class.java) ?: false
+
+                    val host = snapshot.child("host")
+                        .getValue(String::class.java)
+
+                    if (!active || host.isNullOrBlank()) {
+                        onFailure("Session does not exist or is already closed")
+                        return@addOnSuccessListener
+                    }
+
+                    if (snapshot.child("bans").hasChild(uid)) {
+                        onFailure("You are banned from this session")
+                        return@addOnSuccessListener
+                    }
+
+                    onSuccess()
+                }
+                .addOnFailureListener { error ->
+                    onFailure(
+                        "Could not verify session: ${error.message ?: "Firebase error"}"
+                    )
+                }
+        }
+
+        if (auth.currentUser != null) {
+            checkWithAuthenticatedUser()
+        } else {
+            auth.signInAnonymously()
+                .addOnSuccessListener {
+                    checkWithAuthenticatedUser()
+                }
+                .addOnFailureListener { error ->
+                    onFailure(
+                        "Authentication failed: ${error.message ?: "Firebase error"}"
+                    )
+                }
+        }
     }
 }
