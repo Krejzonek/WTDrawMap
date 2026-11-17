@@ -64,6 +64,7 @@ class MainActivity : AppCompatActivity() {
     private var activeSessionCode = ""
     private var isSessionMenuOpen = false
     private var hasActiveSession = false
+    private var isReturningHome = false
 
     private var apiClient: WarThunderApiClient? = null
     private lateinit var scaleDetector: ScaleGestureDetector
@@ -406,6 +407,16 @@ class MainActivity : AppCompatActivity() {
                     labels.add("YOU")
                 }
 
+                if (!participant.isHost) {
+                    labels.add(
+                        if (participant.canDraw) {
+                            "DRAW ENABLED"
+                        } else {
+                            "DRAW DISABLED"
+                        }
+                    )
+                }
+
                 text = labels.joinToString("  •  ")
                 setTextColor(
                     if (participant.isHost) {
@@ -430,6 +441,33 @@ class MainActivity : AppCompatActivity() {
             row.addView(statusDot)
             row.addView(nameColumn)
 
+            if (isHost && !participant.isHost && !isLocalPlayer) {
+                val manageButton = TextView(this).apply {
+                    text = "MANAGE"
+                    textSize = 10f
+                    setTypeface(Typeface.DEFAULT, Typeface.BOLD)
+                    setTextColor(Color.rgb(114, 183, 245))
+                    gravity = Gravity.CENTER
+                    setPadding(
+                        (10 * density).toInt(),
+                        (8 * density).toInt(),
+                        (10 * density).toInt(),
+                        (8 * density).toInt()
+                    )
+                    setBackgroundResource(
+                        android.R.drawable.list_selector_background
+                    )
+                    isClickable = true
+                    isFocusable = true
+
+                    setOnClickListener {
+                        showParticipantManagement(participant)
+                    }
+                }
+
+                row.addView(manageButton)
+            }
+
             participantsContainer.addView(row)
 
             val divider = View(this).apply {
@@ -446,6 +484,122 @@ class MainActivity : AppCompatActivity() {
         }
 
         updateLeaveSessionButton()
+    }
+
+    private fun showParticipantManagement(participant: SessionParticipant) {
+        if (!isHost || !::multiplayer.isInitialized) return
+
+        val options = arrayOf(
+            if (participant.canDraw) {
+                "Disable drawing"
+            } else {
+                "Allow drawing"
+            },
+            "Delete all drawings",
+            "Kick from session",
+            "Ban from session"
+        )
+
+        AlertDialog.Builder(this)
+            .setTitle(participant.name)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> {
+                        multiplayer.setParticipantDrawingPermission(
+                            participant.uid,
+                            !participant.canDraw
+                        ) { success, error ->
+                            runOnUiThread {
+                                if (success) {
+                                    ToastMessage(
+                                        if (participant.canDraw) {
+                                            "Drawing permission removed"
+                                        } else {
+                                            "Drawing permission granted"
+                                        }
+                                    )
+                                } else {
+                                    ToastMessage(error ?: "Permission update failed")
+                                }
+                            }
+                        }
+                    }
+
+                    1 -> confirmDeleteParticipantDrawings(participant)
+                    2 -> confirmParticipantModeration(participant, false)
+                    3 -> confirmParticipantModeration(participant, true)
+                }
+            }
+            .setNegativeButton("CANCEL", null)
+            .show()
+    }
+
+    private fun confirmDeleteParticipantDrawings(
+        participant: SessionParticipant
+    ) {
+        AlertDialog.Builder(this)
+            .setTitle("Delete all drawings")
+            .setMessage(
+                "Delete all drawings made by ${participant.name}?\n\nThis action cannot be undone."
+            )
+            .setPositiveButton("DELETE") { _, _ ->
+                multiplayer.clearParticipantDrawings(
+                    participant.uid
+                ) { success, error ->
+                    runOnUiThread {
+                        if (success) {
+                            ToastMessage(
+                                "All drawings by ${participant.name} deleted"
+                            )
+                        } else {
+                            ToastMessage(
+                                error ?: "Could not delete participant drawings"
+                            )
+                        }
+                    }
+                }
+            }
+            .setNegativeButton("CANCEL", null)
+            .show()
+    }
+
+    private fun confirmParticipantModeration(
+        participant: SessionParticipant,
+        ban: Boolean
+    ) {
+        val action = if (ban) "BAN" else "KICK"
+
+        val message = if (ban) {
+            "Block ${participant.name} from rejoining this session?"
+        } else {
+            "Remove ${participant.name} from this session?"
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(action)
+            .setMessage(message)
+            .setPositiveButton(action) { _, _ ->
+                multiplayer.moderateParticipant(
+                    participant.uid,
+                    ban
+                ) { success, error ->
+                    runOnUiThread {
+                        if (success) {
+                            ToastMessage(
+                                if (ban) {
+                                    "${participant.name} banned"
+                                } else {
+                                    "${participant.name} kicked"
+                                }
+                            )
+                        } else {
+                            ToastMessage(error ?: "Moderation failed")
+                        }
+                    }
+                }
+            }
+            .setNegativeButton("CANCEL", null)
+            .show()
     }
 
     private fun confirmLeaveSession() {
@@ -485,41 +639,67 @@ class MainActivity : AppCompatActivity() {
                 updateSessionCode("")
                 updateParticipants(emptyList())
 
-                updateStatus(
+                returnToHome(
                     if (success) {
-                        "Returning to home..."
-                    } else {
                         "Leaving session..."
+                    } else {
+                        "Session disconnected locally"
+                    },
+                    if (!success) {
+                        "Firebase error: ${error ?: "Unknown error"}"
+                    } else {
+                        null
                     }
                 )
-
-                val intent = Intent(
-                    this,
-                    HomeActivity::class.java
-                ).apply {
-                    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP
-                }
-
-                startActivity(intent)
-                finish()
-
-                if (!success) {
-                    android.widget.Toast.makeText(
-                        this,
-                        "Session disconnected locally. Firebase error: ${error ?: "Unknown error"}",
-                        android.widget.Toast.LENGTH_LONG
-                    ).show()
-                }
             }
         }
+    }
+
+    private fun returnToHome(
+        message: String,
+        toastMessage: String? = null
+    ) {
+        if (isReturningHome || isFinishing || isDestroyed) return
+
+        isReturningHome = true
+        hasActiveSession = false
+        activeSessionCode = ""
+
+        updateSessionCode("")
+        updateParticipants(emptyList())
+        updateStatus(message)
+        updateMapHint("Disconnected from session")
+
+        if (::drawingToolbar.isInitialized) {
+            drawingToolbar.setDrawingAllowed(false)
+        }
+
+        closeSessionMenu()
+
+        toastMessage?.let {
+            android.widget.Toast.makeText(
+                this,
+                it,
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
+
+        val homeIntent = Intent(
+            this,
+            HomeActivity::class.java
+        ).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+
+        startActivity(homeIntent)
+        finish()
     }
 
     private fun updateSessionCode(code: String) {
         if (!::sessionCodeView.isInitialized) return
 
         activeSessionCode = code.trim()
-
         hasActiveSession = activeSessionCode.isNotBlank()
 
         sessionCodeView.post {
@@ -601,6 +781,7 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
+        drawingToolbar.setDrawingAllowed(isHost)
         updateDrawingLegend()
     }
 
@@ -621,7 +802,6 @@ class MainActivity : AppCompatActivity() {
         val density = resources.displayMetrics.density
 
         entries.forEach { entry ->
-
             val item = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -822,11 +1002,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-
     private fun initializeApi() {
         apiClient = WarThunderApiClient(applicationContext)
     }
-
     private fun initializeMultiplayer() {
         multiplayer = MultiplayerSessionManager(
             applicationContext,
@@ -834,12 +1012,16 @@ class MainActivity : AppCompatActivity() {
 
                 override fun onStatus(message: String) {
                     runOnUiThread {
-                        updateStatus(message)
+                        if (!isReturningHome) {
+                            updateStatus(message)
+                        }
                     }
                 }
 
                 override fun onSessionCreated(code: String) {
                     runOnUiThread {
+                        if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
+
                         hasActiveSession = true
                         updateSessionCode(code)
                         updateStatus("Session: $code")
@@ -851,13 +1033,17 @@ class MainActivity : AppCompatActivity() {
 
                 override fun onParticipantJoined(name: String) {
                     runOnUiThread {
-                        ToastMessage("$name joined the session")
+                        if (!isFinishing && !isDestroyed && !isReturningHome) {
+                            ToastMessage("$name joined the session")
+                        }
                     }
                 }
 
                 override fun onParticipantLeft(uid: String) {
                     runOnUiThread {
-                        ToastMessage("A participant left the session")
+                        if (!isFinishing && !isDestroyed && !isReturningHome) {
+                            ToastMessage("A participant left the session")
+                        }
                     }
                 }
 
@@ -865,7 +1051,7 @@ class MainActivity : AppCompatActivity() {
                     participants: List<SessionParticipant>
                 ) {
                     runOnUiThread {
-                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
 
                         if (participants.isNotEmpty()) {
                             hasActiveSession =
@@ -880,27 +1066,12 @@ class MainActivity : AppCompatActivity() {
 
                 override fun onSessionClosed() {
                     runOnUiThread {
-                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
 
-                        hasActiveSession = false
-
-                        updateSessionCode("")
-                        updateParticipants(emptyList())
-                        updateStatus("Host closed the session")
-                        updateMapHint("Session closed")
-
-                        ToastMessage("Host closed the session")
-
-                        val intent = Intent(
-                            this@MainActivity,
-                            HomeActivity::class.java
-                        ).apply {
-                            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                                    Intent.FLAG_ACTIVITY_SINGLE_TOP
-                        }
-
-                        startActivity(intent)
-                        finish()
+                        returnToHome(
+                            "Host closed the session",
+                            "Host closed the session"
+                        )
                     }
                 }
 
@@ -910,7 +1081,7 @@ class MainActivity : AppCompatActivity() {
                     image: ByteArray?
                 ) {
                     runOnUiThread {
-                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
 
                         if (!info.optBoolean("valid", false)) {
                             clearMap()
@@ -959,7 +1130,7 @@ class MainActivity : AppCompatActivity() {
 
                 override fun onObjectsReceived(objects: JSONObject) {
                     runOnUiThread {
-                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
                         applyReceivedObjects(objects)
                     }
                 }
@@ -977,6 +1148,7 @@ class MainActivity : AppCompatActivity() {
                                 if (
                                     !isFinishing &&
                                     !isDestroyed &&
+                                    !isReturningHome &&
                                     ::drawingManager.isInitialized
                                 ) {
                                     multiplayer.sendDrawingMessage(
@@ -991,8 +1163,42 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     runOnUiThread {
-                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
                         drawingManager.applyRemoteMessage(message)
+                    }
+                }
+
+                override fun onDrawingPermissionChanged(allowed: Boolean) {
+                    runOnUiThread {
+                        if (
+                            isFinishing ||
+                            isDestroyed ||
+                            isReturningHome ||
+                            !::drawingToolbar.isInitialized
+                        ) {
+                            return@runOnUiThread
+                        }
+
+                        drawingToolbar.setDrawingAllowed(allowed)
+
+                        ToastMessage(
+                            if (allowed) {
+                                "You can now draw on the map"
+                            } else {
+                                "Your drawing permission was removed"
+                            }
+                        )
+                    }
+                }
+
+                override fun onRemovedFromSession(reason: String) {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
+
+                        returnToHome(
+                            reason,
+                            reason
+                        )
                     }
                 }
 
@@ -1000,7 +1206,7 @@ class MainActivity : AppCompatActivity() {
                     if (!isHost) return
 
                     runOnUiThread {
-                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
 
                         val info = lastMapInfo
                         val objects = lastMapObjects
@@ -1028,7 +1234,7 @@ class MainActivity : AppCompatActivity() {
 
                 override fun onError(message: String) {
                     runOnUiThread {
-                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
 
                         updateStatus(message)
                         ToastMessage(message)
@@ -1039,7 +1245,7 @@ class MainActivity : AppCompatActivity() {
 
         multiplayer.initialize { success ->
             runOnUiThread {
-                if (!success || isFinishing || isDestroyed) return@runOnUiThread
+                if (!success || isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
 
                 drawingManager.setLocalAuthor(
                     multiplayer.getLocalUid(),
@@ -1062,7 +1268,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSessionCodeDialog(code: String) {
-        if (isFinishing || isDestroyed) return
+        if (isFinishing || isDestroyed || isReturningHome) return
 
         AlertDialog.Builder(this)
             .setTitle("Multiplayer session created")
@@ -1083,13 +1289,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startSearching() {
-        if (!isHost) return
+        if (!isHost || isReturningHome) return
 
         updateTask?.cancel(false)
 
         updateTask = scheduler.scheduleWithFixedDelay(
             {
                 try {
+                    if (isReturningHome || isFinishing || isDestroyed) return@scheduleWithFixedDelay
+
                     val client = apiClient ?: return@scheduleWithFixedDelay
 
                     if (client.getServerAddress() == null) {
@@ -1110,7 +1318,7 @@ class MainActivity : AppCompatActivity() {
     private fun discoverServer() {
         val client = apiClient ?: return
 
-        if (isDiscovering || deviceSelectionDialogShowing) return
+        if (isDiscovering || deviceSelectionDialogShowing || isReturningHome) return
 
         isDiscovering = true
 
@@ -1118,7 +1326,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 isDiscovering = false
 
-                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
 
                 if (devices.isEmpty()) {
                     updateStatus("Searching for War Thunder...")
@@ -1132,7 +1340,7 @@ class MainActivity : AppCompatActivity() {
     private fun showDeviceSelectionDialog(
         devices: List<WarThunderApiClient.ServerDevice>
     ) {
-        if (isFinishing || isDestroyed || devices.isEmpty()) return
+        if (isFinishing || isDestroyed || devices.isEmpty() || isReturningHome) return
 
         deviceSelectionDialog?.dismiss()
         deviceSelectionDialogShowing = true
@@ -1211,7 +1419,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun changeDevice() {
-        if (!isHost) return
+        if (!isHost || isReturningHome) return
 
         deviceSelectionDialog?.dismiss()
         deviceSelectionDialog = null
@@ -1240,7 +1448,7 @@ class MainActivity : AppCompatActivity() {
     private fun loadMap() {
         val client = apiClient ?: return
 
-        if (isLoading) return
+        if (isLoading || isReturningHome) return
 
         isLoading = true
 
@@ -1248,7 +1456,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 isLoading = false
 
-                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
 
                 if (
                     data != null &&
