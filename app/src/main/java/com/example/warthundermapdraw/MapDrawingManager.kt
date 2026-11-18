@@ -15,14 +15,10 @@ import java.util.UUID
 import kotlin.math.max
 import kotlin.math.min
 
-class MapDrawingManager(
-    private val density: Float
-) {
+class MapDrawingManager(private val density: Float) {
 
     enum class Tool {
-        NONE,
-        PENCIL,
-        ERASER
+        NONE, PENCIL, ERASER
     }
 
     data class Stroke(
@@ -49,7 +45,7 @@ class MapDrawingManager(
 
     private val layers = mutableMapOf<String, DrawingLayer>()
 
-    var currentKey: String = "default"
+    var currentKey = "default"
         private set
 
     var activeTool = Tool.NONE
@@ -63,26 +59,20 @@ class MapDrawingManager(
     var onLocalOperation: ((JSONObject) -> Unit)? = null
 
     private var activeStroke: Stroke? = null
-
     private var localUid = "local"
     private var localName = ""
 
-    var canDraw: Boolean = true
+    var canDraw = true
         private set
 
     private val currentLayer: DrawingLayer
-        get() = layers.getOrPut(currentKey) {
-            DrawingLayer()
-        }
+        get() = layers.getOrPut(currentKey) { DrawingLayer() }
 
     val canUndo: Boolean
-        get() = canDraw && currentLayer.strokes.any {
-            it.authorUid == localUid
-        }
+        get() = canDraw && currentLayer.strokes.any { it.authorUid == localUid }
 
     val canRedo: Boolean
-        get() = canDraw &&
-                currentLayer.redo[localUid]?.isNotEmpty() == true
+        get() = canDraw && currentLayer.redo[localUid]?.isNotEmpty() == true
 
     fun setLocalAuthor(uid: String, name: String) {
         localUid = uid.ifBlank { "local" }
@@ -96,11 +86,8 @@ class MapDrawingManager(
 
         if (!allowed) {
             activeStroke?.let { stroke ->
-                currentLayer.strokes.removeAll {
-                    it.id == stroke.id
-                }
+                currentLayer.strokes.removeAll { it.id == stroke.id }
             }
-
             activeStroke = null
             activeTool = Tool.NONE
         }
@@ -114,55 +101,35 @@ class MapDrawingManager(
         activeStroke = null
         currentKey = key
         currentLayer
-
         onDrawingChanged?.invoke()
         return true
     }
 
-    fun createMapKey(
-        address: String,
-        info: JSONObject
-    ): String {
-        val generation = info.optInt("map_generation", -1)
-        val hudType = info.optInt("hud_type", -1)
-
+    fun createMapKey(address: String, info: JSONObject): String {
         val mapName = info.optString(
             "map_name",
-            info.optString(
-                "map_id",
-                info.optString("map", "")
-            )
+            info.optString("map_id", info.optString("map", ""))
         )
-
-        val mapMin = info.optJSONArray("map_min")?.toString() ?: ""
-        val mapMax = info.optJSONArray("map_max")?.toString() ?: ""
 
         return listOf(
             address,
-            generation.toString(),
-            hudType.toString(),
+            info.optInt("map_generation", -1).toString(),
+            info.optInt("hud_type", -1).toString(),
             mapName,
-            mapMin,
-            mapMax
+            info.optJSONArray("map_min")?.toString() ?: "",
+            info.optJSONArray("map_max")?.toString() ?: ""
         ).joinToString("|")
     }
 
-    fun startStroke(
-        normalizedX: Float,
-        normalizedY: Float
-    ) {
-        if (!canDraw) return
-        if (activeTool == Tool.NONE) return
+    fun startStroke(normalizedX: Float, normalizedY: Float) {
+        if (!canDraw || activeTool == Tool.NONE) return
 
         val stroke = Stroke(
             color = currentColor,
-            widthDp = brushSizeDp.coerceIn(1f, 10f),
+            widthDp = brushSizeDp,
             isEraser = activeTool == Tool.ERASER,
             points = mutableListOf(
-                PointF(
-                    normalizedX.coerceIn(0f, 1f),
-                    normalizedY.coerceIn(0f, 1f)
-                )
+                PointF(normalizedX.coerceIn(0f, 1f), normalizedY.coerceIn(0f, 1f))
             ),
             authorUid = localUid,
             authorName = localName
@@ -171,25 +138,16 @@ class MapDrawingManager(
         currentLayer.strokes.add(stroke)
         currentLayer.redo[localUid]?.clear()
         activeStroke = stroke
-
         onDrawingChanged?.invoke()
     }
 
-    fun addPoint(
-        normalizedX: Float,
-        normalizedY: Float
-    ) {
+    fun addPoint(normalizedX: Float, normalizedY: Float) {
         if (!canDraw) return
 
         val stroke = activeStroke ?: return
-
         stroke.points.add(
-            PointF(
-                normalizedX.coerceIn(0f, 1f),
-                normalizedY.coerceIn(0f, 1f)
-            )
+            PointF(normalizedX.coerceIn(0f, 1f), normalizedY.coerceIn(0f, 1f))
         )
-
         onDrawingChanged?.invoke()
     }
 
@@ -203,31 +161,21 @@ class MapDrawingManager(
         activeStroke = null
 
         onLocalOperation?.invoke(
-            strokeToJson(stroke, currentKey)
-                .put("type", "drawingStroke")
+            strokeToJson(stroke, currentKey).put("type", "drawingStroke")
         )
-
         onDrawingChanged?.invoke()
     }
 
     fun undo() {
         if (!canDraw) return
 
-        val index = currentLayer.strokes.indexOfLast {
-            it.authorUid == localUid
-        }
-
+        val index = currentLayer.strokes.indexOfLast { it.authorUid == localUid }
         if (index < 0) return
 
         val stroke = currentLayer.strokes.removeAt(index)
+        currentLayer.redo.getOrPut(localUid) { mutableListOf() }.add(stroke)
 
-        currentLayer.redo
-            .getOrPut(localUid) { mutableListOf() }
-            .add(stroke)
-
-        if (activeStroke?.id == stroke.id) {
-            activeStroke = null
-        }
+        if (activeStroke?.id == stroke.id) activeStroke = null
 
         onLocalOperation?.invoke(
             JSONObject()
@@ -236,7 +184,6 @@ class MapDrawingManager(
                 .put("authorUid", localUid)
                 .put("mapKey", currentKey)
         )
-
         onDrawingChanged?.invoke()
     }
 
@@ -256,7 +203,6 @@ class MapDrawingManager(
                 .put("authorUid", localUid)
                 .put("mapKey", currentKey)
         )
-
         onDrawingChanged?.invoke()
     }
 
@@ -264,7 +210,6 @@ class MapDrawingManager(
         layers.clear()
         currentKey = "default"
         activeStroke = null
-
         onDrawingChanged?.invoke()
     }
 
@@ -274,19 +219,8 @@ class MapDrawingManager(
         var changed = false
 
         layers.values.forEach { layer ->
-            val removedStrokes = layer.strokes.removeAll {
-                it.authorUid == uid
-            }
-
-            if (removedStrokes) {
-                changed = true
-            }
-
-            val removedRedo = layer.redo.remove(uid) != null
-
-            if (removedRedo) {
-                changed = true
-            }
+            if (layer.strokes.removeAll { it.authorUid == uid }) changed = true
+            if (layer.redo.remove(uid) != null) changed = true
         }
 
         if (activeStroke?.authorUid == uid) {
@@ -294,30 +228,24 @@ class MapDrawingManager(
             changed = true
         }
 
-        if (changed) {
-            onDrawingChanged?.invoke()
-        }
+        if (changed) onDrawingChanged?.invoke()
     }
 
     fun getLegendEntries(): List<LegendEntry> {
-        val usedColors = currentLayer.strokes
-            .filter { !it.isEraser }
+        return currentLayer.strokes
+            .filterNot { it.isEraser }
             .map { it.color }
             .distinct()
-
-        return usedColors.map { color ->
-            LegendEntry(
-                color = color,
-                colorName = getColorName(color),
-                description = currentLayer.legendDescriptions[color].orEmpty()
-            )
-        }
+            .map { color ->
+                LegendEntry(
+                    color,
+                    getColorName(color),
+                    currentLayer.legendDescriptions[color].orEmpty()
+                )
+            }
     }
 
-    fun setColorDescription(
-        color: Int,
-        description: String
-    ) {
+    fun setColorDescription(color: Int, description: String) {
         if (!canDraw) return
 
         val cleanDescription = description.trim()
@@ -330,7 +258,6 @@ class MapDrawingManager(
                 .put("description", cleanDescription)
                 .put("mapKey", currentKey)
         )
-
         onDrawingChanged?.invoke()
     }
 
@@ -352,13 +279,9 @@ class MapDrawingManager(
 
     fun createSnapshot(): JSONObject {
         val strokes = JSONArray()
-
-        currentLayer.strokes.forEach {
-            strokes.put(strokeToJson(it, currentKey))
-        }
+        currentLayer.strokes.forEach { strokes.put(strokeToJson(it, currentKey)) }
 
         val legend = JSONArray()
-
         currentLayer.legendDescriptions.forEach { (color, description) ->
             legend.put(
                 JSONObject()
@@ -387,30 +310,22 @@ class MapDrawingManager(
 
     private fun applySnapshot(message: JSONObject) {
         val mapKey = message.optString("mapKey", currentKey)
-        val layer = layers.getOrPut(mapKey) {
-            DrawingLayer()
-        }
+        val layer = layers.getOrPut(mapKey) { DrawingLayer() }
 
         layer.strokes.clear()
         layer.redo.clear()
         layer.legendDescriptions.clear()
 
         val strokes = message.optJSONArray("strokes") ?: JSONArray()
-
         for (i in 0 until strokes.length()) {
-            val strokeJson = strokes.optJSONObject(i) ?: continue
-            val stroke = strokeFromJson(strokeJson) ?: continue
+            val stroke = strokeFromJson(strokes.optJSONObject(i) ?: continue) ?: continue
             layer.strokes.add(stroke)
         }
 
         val legend = message.optJSONArray("legend") ?: JSONArray()
-
         for (i in 0 until legend.length()) {
             val entry = legend.optJSONObject(i) ?: continue
-
-            layer.legendDescriptions[
-                entry.optInt("color")
-            ] = entry.optString("description")
+            layer.legendDescriptions[entry.optInt("color")] = entry.optString("description")
         }
 
         if (mapKey == currentKey) {
@@ -421,10 +336,7 @@ class MapDrawingManager(
 
     private fun applyRemoteStroke(message: JSONObject) {
         val mapKey = message.optString("mapKey", currentKey)
-        val layer = layers.getOrPut(mapKey) {
-            DrawingLayer()
-        }
-
+        val layer = layers.getOrPut(mapKey) { DrawingLayer() }
         val stroke = strokeFromJson(message) ?: return
 
         if (layer.strokes.any { it.id == stroke.id }) return
@@ -432,89 +344,51 @@ class MapDrawingManager(
         layer.strokes.add(stroke)
         layer.redo[stroke.authorUid]?.clear()
 
-        if (mapKey == currentKey) {
-            onDrawingChanged?.invoke()
-        }
+        if (mapKey == currentKey) onDrawingChanged?.invoke()
     }
 
     private fun applyRemoteUndo(message: JSONObject) {
         val mapKey = message.optString("mapKey", currentKey)
-        val layer = layers.getOrPut(mapKey) {
-            DrawingLayer()
-        }
-
+        val layer = layers.getOrPut(mapKey) { DrawingLayer() }
         val strokeId = message.optString("strokeId")
         val authorUid = message.optString("authorUid")
 
         val index = layer.strokes.indexOfLast {
-            it.id == strokeId &&
-                    (authorUid.isBlank() || it.authorUid == authorUid)
+            it.id == strokeId && (authorUid.isBlank() || it.authorUid == authorUid)
         }
-
         if (index < 0) return
 
         val stroke = layer.strokes.removeAt(index)
+        layer.redo.getOrPut(stroke.authorUid) { mutableListOf() }.add(stroke)
 
-        layer.redo
-            .getOrPut(stroke.authorUid) { mutableListOf() }
-            .add(stroke)
-
-        if (activeStroke?.id == stroke.id) {
-            activeStroke = null
-        }
-
-        if (mapKey == currentKey) {
-            onDrawingChanged?.invoke()
-        }
+        if (activeStroke?.id == stroke.id) activeStroke = null
+        if (mapKey == currentKey) onDrawingChanged?.invoke()
     }
 
     private fun applyRemoteRedo(message: JSONObject) {
         val mapKey = message.optString("mapKey", currentKey)
-        val layer = layers.getOrPut(mapKey) {
-            DrawingLayer()
-        }
-
+        val layer = layers.getOrPut(mapKey) { DrawingLayer() }
         val strokeId = message.optString("strokeId")
         val authorUid = message.optString("authorUid")
-
         val redoList = layer.redo[authorUid] ?: return
 
-        val index = redoList.indexOfLast {
-            it.id == strokeId
-        }
-
+        val index = redoList.indexOfLast { it.id == strokeId }
         if (index < 0) return
 
-        val stroke = redoList.removeAt(index)
-        layer.strokes.add(stroke)
-
-        if (mapKey == currentKey) {
-            onDrawingChanged?.invoke()
-        }
+        layer.strokes.add(redoList.removeAt(index))
+        if (mapKey == currentKey) onDrawingChanged?.invoke()
     }
 
     private fun applyRemoteLegend(message: JSONObject) {
         val mapKey = message.optString("mapKey", currentKey)
-        val layer = layers.getOrPut(mapKey) {
-            DrawingLayer()
-        }
+        val layer = layers.getOrPut(mapKey) { DrawingLayer() }
 
-        val color = message.optInt("color")
-        val description = message.optString("description")
-
-        layer.legendDescriptions[color] = description
-
-        if (mapKey == currentKey) {
-            onDrawingChanged?.invoke()
-        }
+        layer.legendDescriptions[message.optInt("color")] = message.optString("description")
+        if (mapKey == currentKey) onDrawingChanged?.invoke()
     }
 
-    private fun strokeToJson(
-        stroke: Stroke,
-        mapKey: String
-    ): JSONObject {
+    private fun strokeToJson(stroke: Stroke, mapKey: String): JSONObject {
         val points = JSONArray()
-
         stroke.points.forEach { point ->
             points.put(
                 JSONObject()
@@ -540,7 +414,6 @@ class MapDrawingManager(
 
         for (i in 0 until pointsJson.length()) {
             val point = pointsJson.optJSONObject(i) ?: continue
-
             points.add(
                 PointF(
                     point.optDouble("x").toFloat().coerceIn(0f, 1f),
@@ -554,9 +427,7 @@ class MapDrawingManager(
         return Stroke(
             id = json.optString("id", UUID.randomUUID().toString()),
             color = json.optInt("color", Color.RED),
-            widthDp = json.optDouble("widthDp", 4.0)
-                .toFloat()
-                .coerceIn(1f, 10f),
+            widthDp = json.optDouble("widthDp", 4.0).toFloat().coerceIn(1f, 10f),
             isEraser = json.optBoolean("isEraser", false),
             points = points,
             authorUid = json.optString("authorUid"),
@@ -564,17 +435,13 @@ class MapDrawingManager(
         )
     }
 
-    fun draw(
-        canvas: Canvas,
-        mapRect: RectF
-    ) {
+    fun draw(canvas: Canvas, mapRect: RectF) {
         canvas.saveLayer(mapRect, null)
 
         for (stroke in currentLayer.strokes) {
             if (stroke.points.isEmpty()) continue
 
             val strokeWidth = stroke.widthDp.coerceIn(1f, 10f) * density
-
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 style = Paint.Style.STROKE
                 this.strokeWidth = strokeWidth
@@ -590,26 +457,17 @@ class MapDrawingManager(
             }
 
             val first = stroke.points.first()
-
             val firstX = mapRect.left + first.x * mapRect.width()
             val firstY = mapRect.top + first.y * mapRect.height()
 
             if (stroke.points.size == 1) {
                 paint.style = Paint.Style.FILL
-
-                canvas.drawCircle(
-                    firstX,
-                    firstY,
-                    strokeWidth / 2f,
-                    paint
-                )
+                canvas.drawCircle(firstX, firstY, strokeWidth / 2f, paint)
             } else {
-                val path = Path()
-                path.moveTo(firstX, firstY)
+                val path = Path().apply { moveTo(firstX, firstY) }
 
                 for (i in 1 until stroke.points.size) {
                     val point = stroke.points[i]
-
                     path.lineTo(
                         mapRect.left + point.x * mapRect.width(),
                         mapRect.top + point.y * mapRect.height()
@@ -620,24 +478,14 @@ class MapDrawingManager(
             }
 
             if (!stroke.isEraser && stroke.authorName.isNotBlank()) {
-                drawAuthorName(
-                    canvas,
-                    mapRect,
-                    stroke,
-                    strokeWidth
-                )
+                drawAuthorName(canvas, mapRect, stroke, strokeWidth)
             }
         }
 
         canvas.restore()
     }
 
-    private fun drawAuthorName(
-        canvas: Canvas,
-        mapRect: RectF,
-        stroke: Stroke,
-        strokeWidth: Float
-    ) {
+    private fun drawAuthorName(canvas: Canvas, mapRect: RectF, stroke: Stroke, strokeWidth: Float) {
         if (stroke.points.size < 2) return
 
         val text = stroke.authorName.trim()
@@ -650,16 +498,13 @@ class MapDrawingManager(
             )
         }
 
-        val path = Path()
-        path.moveTo(points.first().x, points.first().y)
-
-        for (i in 1 until points.size) {
-            path.lineTo(points[i].x, points[i].y)
+        val path = Path().apply {
+            moveTo(points.first().x, points.first().y)
+            for (i in 1 until points.size) lineTo(points[i].x, points[i].y)
         }
 
         val pathMeasure = PathMeasure(path, false)
         val pathLength = pathMeasure.length
-
         if (pathLength <= 0f) return
 
         val maxSize = 11f * density
@@ -681,17 +526,10 @@ class MapDrawingManager(
         if (originalWidth <= 0f) return
 
         val availableWidth = max(1f, pathLength - padding * 2f)
-
-        paint.textSize = max(
-            minSize,
-            min(maxSize, maxSize * (availableWidth / originalWidth))
-        )
+        paint.textSize = max(minSize, min(maxSize, maxSize * (availableWidth / originalWidth)))
 
         val textWidth = paint.measureText(text)
-
-        if (textWidth > pathLength) {
-            paint.textSize *= pathLength / textWidth
-        }
+        if (textWidth > pathLength) paint.textSize *= pathLength / textWidth
 
         val outlinePaint = Paint(paint).apply {
             color = Color.BLACK
@@ -702,43 +540,22 @@ class MapDrawingManager(
 
         val metrics = paint.fontMetrics
         val verticalOffset = -(metrics.ascent + metrics.descent) / 2f
-
         val offset = max(0f, (pathLength - paint.measureText(text)) / 2f)
 
         val middlePosition = FloatArray(2)
         val middleTangent = FloatArray(2)
-
-        pathMeasure.getPosTan(
-            pathLength / 2f,
-            middlePosition,
-            middleTangent
-        )
+        pathMeasure.getPosTan(pathLength / 2f, middlePosition, middleTangent)
 
         if (middleTangent[0] < 0f) {
-            val reversedPath = Path()
-            reversedPath.moveTo(points.last().x, points.last().y)
-
-            for (i in points.lastIndex - 1 downTo 0) {
-                reversedPath.lineTo(points[i].x, points[i].y)
-            }
-
-            path.set(reversedPath)
+            path.set(Path().apply {
+                moveTo(points.last().x, points.last().y)
+                for (i in points.lastIndex - 1 downTo 0) {
+                    lineTo(points[i].x, points[i].y)
+                }
+            })
         }
 
-        canvas.drawTextOnPath(
-            text,
-            path,
-            offset,
-            verticalOffset,
-            outlinePaint
-        )
-
-        canvas.drawTextOnPath(
-            text,
-            path,
-            offset,
-            verticalOffset,
-            paint
-        )
+        canvas.drawTextOnPath(text, path, offset, verticalOffset, outlinePaint)
+        canvas.drawTextOnPath(text, path, offset, verticalOffset, paint)
     }
 }

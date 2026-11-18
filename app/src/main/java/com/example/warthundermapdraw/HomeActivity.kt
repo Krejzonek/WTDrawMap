@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -30,15 +31,12 @@ class HomeActivity : AppCompatActivity() {
     private lateinit var joinSessionButton: Button
 
     private val auth = FirebaseAuth.getInstance()
+    private val database = FirebaseDatabase.getInstance(DATABASE_URL).reference
 
-    private val database =
-        FirebaseDatabase.getInstance(DATABASE_URL).reference
-
-    private var username: String = DEFAULT_USERNAME
+    private var username = DEFAULT_USERNAME
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         setContentView(R.layout.activity_home)
 
         applySystemInsets()
@@ -50,24 +48,19 @@ class HomeActivity : AppCompatActivity() {
 
     private fun applySystemInsets() {
         val root = findViewById<View>(R.id.HomeRoot)
-
-        val initialLeft = root.paddingLeft
-        val initialTop = root.paddingTop
-        val initialRight = root.paddingRight
-        val initialBottom = root.paddingBottom
+        val left = root.paddingLeft
+        val top = root.paddingTop
+        val right = root.paddingRight
+        val bottom = root.paddingBottom
 
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
-            val systemBars = insets.getInsets(
-                WindowInsetsCompat.Type.systemBars()
-            )
-
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.setPadding(
-                initialLeft + systemBars.left,
-                initialTop + systemBars.top,
-                initialRight + systemBars.right,
-                initialBottom + systemBars.bottom
+                left + bars.left,
+                top + bars.top,
+                right + bars.right,
+                bottom + bars.bottom
             )
-
             insets
         }
 
@@ -81,50 +74,27 @@ class HomeActivity : AppCompatActivity() {
     }
 
     private fun initializeButtons() {
-        usernameButton.setOnClickListener {
-            showUsernameDialog()
-        }
-
-        createSessionButton.setOnClickListener {
-            createSession()
-        }
-
-        joinSessionButton.setOnClickListener {
-            showJoinSessionDialog()
-        }
+        usernameButton.setOnClickListener { showUsernameDialog() }
+        createSessionButton.setOnClickListener { createSession() }
+        joinSessionButton.setOnClickListener { showJoinSessionDialog() }
     }
 
     private fun loadUsername() {
-        val preferences = getSharedPreferences(
-            PREFS_NAME,
-            MODE_PRIVATE
-        )
-
-        val savedUsername = preferences.getString(KEY_USERNAME, null)
-
-        username = if (savedUsername.isNullOrBlank()) {
-            generateRandomUsername().also {
-                preferences.edit()
-                    .putString(KEY_USERNAME, it)
-                    .apply()
+        val preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        username = preferences.getString(KEY_USERNAME, null)
+            ?.takeIf { it.isNotBlank() }
+            ?: generateRandomUsername().also {
+                preferences.edit().putString(KEY_USERNAME, it).apply()
             }
-        } else {
-            savedUsername
-        }
     }
 
-    private fun generateRandomUsername(): String {
-        val number = Random.nextInt(1000, 10000)
-        return "$DEFAULT_USERNAME$number"
-    }
+    private fun generateRandomUsername(): String =
+        "$DEFAULT_USERNAME${Random.nextInt(1000, 10000)}"
 
     private fun saveUsername(newUsername: String) {
         username = newUsername
-
-        getSharedPreferences(
-            PREFS_NAME,
-            MODE_PRIVATE
-        ).edit()
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
             .putString(KEY_USERNAME, username)
             .apply()
 
@@ -145,17 +115,12 @@ class HomeActivity : AppCompatActivity() {
         }
 
         val padding = (24 * resources.displayMetrics.density).toInt()
-
-        val container = android.widget.FrameLayout(this).apply {
+        val container = FrameLayout(this).apply {
             setPadding(padding, padding / 2, padding, 0)
-
-            addView(
-                input,
-                android.widget.FrameLayout.LayoutParams(
-                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
-                )
-            )
+            addView(input, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            ))
         }
 
         AlertDialog.Builder(this)
@@ -167,18 +132,9 @@ class HomeActivity : AppCompatActivity() {
 
                 if (newUsername.isNotEmpty()) {
                     saveUsername(newUsername)
-
-                    Toast.makeText(
-                        this,
-                        "Username saved",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    Toast.makeText(this, "Username saved", Toast.LENGTH_SHORT).show()
                 } else {
-                    Toast.makeText(
-                        this,
-                        "Username cannot be empty",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    Toast.makeText(this, "Username cannot be empty", Toast.LENGTH_SHORT).show()
                 }
             }
             .setNegativeButton("CANCEL", null)
@@ -186,15 +142,20 @@ class HomeActivity : AppCompatActivity() {
     }
 
     private fun createSession() {
-        val intent = Intent(
-            this,
-            MainActivity::class.java
-        )
-
-        intent.putExtra("SESSION_HOST", true)
-        intent.putExtra("USERNAME", username)
-
-        startActivity(intent)
+        AlertDialog.Builder(this)
+            .setTitle("Network connection")
+            .setMessage(
+                "Make sure your phone is connected to the same Wi-Fi network as the device running War Thunder.\n\n" +
+                        "The phone and the game must be on the same local network to receive the tactical map."
+            )
+            .setPositiveButton("CONTINUE") { _, _ ->
+                startActivity(Intent(this, MainActivity::class.java).apply {
+                    putExtra("SESSION_HOST", true)
+                    putExtra("USERNAME", username)
+                })
+            }
+            .setNegativeButton("CANCEL", null)
+            .show()
     }
 
     private fun showJoinSessionDialog() {
@@ -217,9 +178,7 @@ class HomeActivity : AppCompatActivity() {
             val joinButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
 
             joinButton.setOnClickListener {
-                val code = input.text.toString()
-                    .trim()
-                    .uppercase()
+                val code = input.text.toString().trim().uppercase()
 
                 if (!code.matches(Regex("WT-[A-Z0-9]{6}"))) {
                     input.error = "Enter a valid code, e.g. WT-82K4P6"
@@ -230,36 +189,24 @@ class HomeActivity : AppCompatActivity() {
                 joinButton.text = "CHECKING..."
 
                 checkSessionExists(
-                    code = code,
+                    code,
                     onSuccess = {
                         if (isFinishing || isDestroyed) return@checkSessionExists
 
                         dialog.dismiss()
-
-                        val intent = Intent(
-                            this,
-                            MainActivity::class.java
-                        )
-
-                        intent.putExtra("SESSION_HOST", false)
-                        intent.putExtra("SESSION_CODE", code)
-                        intent.putExtra("USERNAME", username)
-
-                        startActivity(intent)
+                        startActivity(Intent(this, MainActivity::class.java).apply {
+                            putExtra("SESSION_HOST", false)
+                            putExtra("SESSION_CODE", code)
+                            putExtra("USERNAME", username)
+                        })
                     },
                     onFailure = { message ->
                         if (isFinishing || isDestroyed) return@checkSessionExists
 
                         joinButton.isEnabled = true
                         joinButton.text = "JOIN"
-
                         input.error = message
-
-                        Toast.makeText(
-                            this,
-                            message,
-                            Toast.LENGTH_LONG
-                        ).show()
+                        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
                     }
                 )
             }
@@ -281,8 +228,7 @@ class HomeActivity : AppCompatActivity() {
                 return
             }
 
-            database.child("rooms")
-                .child(code)
+            database.child("rooms").child(code)
                 .get()
                 .addOnSuccessListener { snapshot ->
                     if (!snapshot.exists()) {
@@ -290,28 +236,19 @@ class HomeActivity : AppCompatActivity() {
                         return@addOnSuccessListener
                     }
 
-                    val active = snapshot.child("active")
-                        .getValue(Boolean::class.java) ?: false
-
-                    val host = snapshot.child("host")
-                        .getValue(String::class.java)
+                    val active = snapshot.child("active").getValue(Boolean::class.java) ?: false
+                    val host = snapshot.child("host").getValue(String::class.java)
 
                     if (!active || host.isNullOrBlank()) {
                         onFailure("Session does not exist or is already closed")
-                        return@addOnSuccessListener
-                    }
-
-                    if (snapshot.child("bans").hasChild(uid)) {
+                    } else if (snapshot.child("bans").hasChild(uid)) {
                         onFailure("You are banned from this session")
-                        return@addOnSuccessListener
+                    } else {
+                        onSuccess()
                     }
-
-                    onSuccess()
                 }
                 .addOnFailureListener { error ->
-                    onFailure(
-                        "Could not verify session: ${error.message ?: "Firebase error"}"
-                    )
+                    onFailure("Could not verify session: ${error.message ?: "Firebase error"}")
                 }
         }
 
@@ -319,13 +256,9 @@ class HomeActivity : AppCompatActivity() {
             checkWithAuthenticatedUser()
         } else {
             auth.signInAnonymously()
-                .addOnSuccessListener {
-                    checkWithAuthenticatedUser()
-                }
+                .addOnSuccessListener { checkWithAuthenticatedUser() }
                 .addOnFailureListener { error ->
-                    onFailure(
-                        "Authentication failed: ${error.message ?: "Firebase error"}"
-                    )
+                    onFailure("Authentication failed: ${error.message ?: "Firebase error"}")
                 }
         }
     }

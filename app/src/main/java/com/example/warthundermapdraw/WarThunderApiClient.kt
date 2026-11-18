@@ -81,16 +81,14 @@ class WarThunderApiClient(private val context: Context) {
                 }
 
                 val addresses = mutableListOf<Long>()
-                var current = localNetwork.networkAddress + 1
                 val ownAddress = ipToLong(localNetwork.address)
+                var current = localNetwork.networkAddress + 1
 
                 while (
                     current < localNetwork.broadcastAddress &&
                     addresses.size < MAX_SCAN_ADDRESSES
                 ) {
-                    if (current != ownAddress) {
-                        addresses.add(current)
-                    }
+                    if (current != ownAddress) addresses.add(current)
                     current++
                 }
 
@@ -104,7 +102,7 @@ class WarThunderApiClient(private val context: Context) {
                 val tasks = mutableListOf<java.util.concurrent.Future<*>>()
 
                 for (ip in addresses) {
-                    val task = scanExecutor.submit {
+                    tasks.add(scanExecutor.submit {
                         try {
                             val ipAddress = longToIp(ip)
                             val candidate = "http://$ipAddress:$PORT"
@@ -115,12 +113,14 @@ class WarThunderApiClient(private val context: Context) {
 
                                 if (json.has("valid")) {
                                     val deviceName = getDeviceName(ipAddress)
+
                                     found.add(
                                         ServerDevice(
                                             name = deviceName,
                                             address = candidate
                                         )
                                     )
+
                                     Log.i(TAG, "War Thunder found: $deviceName ($candidate)")
                                 }
                             }
@@ -129,27 +129,19 @@ class WarThunderApiClient(private val context: Context) {
                         } finally {
                             scanLatch.countDown()
                         }
-                    }
-
-                    tasks.add(task)
+                    })
                 }
 
-                val completed = scanLatch.await(
-                    SCAN_TIMEOUT,
-                    TimeUnit.MILLISECONDS
-                )
-
-                if (!completed) {
+                if (!scanLatch.await(SCAN_TIMEOUT, TimeUnit.MILLISECONDS)) {
                     tasks.forEach {
                         if (!it.isDone) it.cancel(true)
                     }
                 }
 
-                val result = found
-                    .distinctBy { it.address }
-                    .sortedBy { it.name.lowercase() }
-
-                onResult(result)
+                onResult(
+                    found.distinctBy { it.address }
+                        .sortedBy { it.name.lowercase() }
+                )
             } catch (e: Exception) {
                 Log.e(TAG, "Discovery error", e)
                 onResult(emptyList())
@@ -161,14 +153,12 @@ class WarThunderApiClient(private val context: Context) {
 
     private fun getDeviceName(ip: String): String {
         return try {
-            val hostName = InetAddress.getByName(ip).canonicalHostName
+            val hostName = InetAddress.getByName(ip)
+                .canonicalHostName
                 .trim()
                 .removeSuffix(".")
 
-            if (
-                hostName.isNotBlank() &&
-                !hostName.equals(ip, ignoreCase = true)
-            ) {
+            if (hostName.isNotBlank() && !hostName.equals(ip, ignoreCase = true)) {
                 hostName
             } else {
                 ip
@@ -201,10 +191,7 @@ class WarThunderApiClient(private val context: Context) {
                     return@execute
                 }
 
-                val infoText = request(
-                    "$address/map_info.json",
-                    TIMEOUT
-                )
+                val infoText = request("$address/map_info.json")
 
                 if (infoText == null) {
                     handleConnectionError()
@@ -227,16 +214,13 @@ class WarThunderApiClient(private val context: Context) {
                     return@execute
                 }
 
-                val objectsText = request(
-                    "$address/map_obj.json",
-                    TIMEOUT
-                )
+                val objectsText = request("$address/map_obj.json")
 
                 val objects = if (objectsText != null) {
                     try {
-                        val parsed = parseObjectsJson(objectsText)
-                        cachedObjects = parsed
-                        parsed
+                        parseObjectsJson(objectsText).also {
+                            cachedObjects = it
+                        }
                     } catch (e: Exception) {
                         Log.e(TAG, "Map objects parsing error", e)
                         cachedObjects
@@ -303,10 +287,7 @@ class WarThunderApiClient(private val context: Context) {
     private fun handleConnectionError() {
         connectionErrors++
 
-        Log.w(
-            TAG,
-            "Connection error: $connectionErrors/$MAX_ERRORS"
-        )
+        Log.w(TAG, "Connection error: $connectionErrors/$MAX_ERRORS")
 
         if (connectionErrors >= MAX_ERRORS) {
             Log.w(TAG, "Connection lost. Searching again.")
@@ -339,25 +320,23 @@ class WarThunderApiClient(private val context: Context) {
 
     private fun findLocalNetwork(): LocalNetwork? {
         return try {
-            val connectivityManager =
-                context.getSystemService(Context.CONNECTIVITY_SERVICE)
-                        as ConnectivityManager
+            val connectivityManager = context.getSystemService(
+                Context.CONNECTIVITY_SERVICE
+            ) as ConnectivityManager
 
             val network = connectivityManager.activeNetwork ?: return null
-
-            val capabilities =
-                connectivityManager.getNetworkCapabilities(network) ?: return null
+            val capabilities = connectivityManager.getNetworkCapabilities(network)
+                ?: return null
 
             if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
                 return null
             }
 
-            val properties =
-                connectivityManager.getLinkProperties(network) ?: return null
+            val properties = connectivityManager.getLinkProperties(network)
+                ?: return null
 
             val linkAddress = properties.linkAddresses.firstOrNull {
-                it.address is Inet4Address &&
-                        !it.address.isLoopbackAddress
+                it.address is Inet4Address && !it.address.isLoopbackAddress
             } ?: return null
 
             val address = linkAddress.address.hostAddress ?: return null
@@ -367,10 +346,8 @@ class WarThunderApiClient(private val context: Context) {
 
             val ip = ipToLong(address)
             val mask = (0xFFFFFFFFL shl (32 - prefix)) and 0xFFFFFFFFL
-
             val networkAddress = ip and mask
-            val broadcastAddress =
-                networkAddress or (mask xor 0xFFFFFFFFL)
+            val broadcastAddress = networkAddress or (mask xor 0xFFFFFFFFL)
 
             LocalNetwork(
                 address,
