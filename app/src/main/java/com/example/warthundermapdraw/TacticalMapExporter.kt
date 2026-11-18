@@ -21,7 +21,6 @@ object TacticalMapExporter {
         overlay: MapOverlayView,
         drawingEntries: List<MapDrawingManager.LegendEntry>
     ): Boolean {
-
         var outputBitmap: Bitmap? = null
 
         return try {
@@ -29,7 +28,6 @@ object TacticalMapExporter {
                 ?: throw IllegalStateException("Map is not ready")
 
             val width = sourceBitmap.width
-
             val padding = (width * 0.025f).coerceAtLeast(12f)
             val legendTextSize = (width * 0.018f).coerceIn(13f, 25f)
             val swatchSize = legendTextSize * 0.9f
@@ -37,6 +35,7 @@ object TacticalMapExporter {
             val itemGap = legendTextSize * 1.1f
             val rowHeight = legendTextSize * 1.9f
             val legendTitleSize = legendTextSize * 1.15f
+            val availableWidth = width - padding * 2f
 
             val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.rgb(220, 232, 245)
@@ -61,8 +60,6 @@ object TacticalMapExporter {
                 strokeWidth = (width * 0.0015f).coerceAtLeast(1f)
             }
 
-            val availableWidth = width - padding * 2f
-
             fun label(entry: MapDrawingManager.LegendEntry): String {
                 return if (entry.description.isBlank()) {
                     entry.colorName
@@ -72,10 +69,7 @@ object TacticalMapExporter {
             }
 
             fun itemWidth(entry: MapDrawingManager.LegendEntry): Float {
-                return swatchSize +
-                        textGap +
-                        textPaint.measureText(label(entry)) +
-                        itemGap
+                return swatchSize + textGap + textPaint.measureText(label(entry)) + itemGap
             }
 
             fun rowCount(): Int {
@@ -87,10 +81,7 @@ object TacticalMapExporter {
                 for (entry in drawingEntries) {
                     val entryWidth = itemWidth(entry)
 
-                    if (
-                        currentX > 0f &&
-                        currentX + entryWidth > availableWidth
-                    ) {
+                    if (currentX > 0f && currentX + entryWidth > availableWidth) {
                         rows++
                         currentX = 0f
                     }
@@ -117,26 +108,20 @@ object TacticalMapExporter {
                 Bitmap.Config.ARGB_8888
             )
 
-            val canvas = Canvas(outputBitmap!!)
+            val canvas = Canvas(outputBitmap)
 
             canvas.drawBitmap(
                 sourceBitmap,
                 0f,
                 0f,
-                Paint(
-                    Paint.ANTI_ALIAS_FLAG or
-                            Paint.FILTER_BITMAP_FLAG
-                )
+                Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
             )
 
-            val scaleX =
-                sourceBitmap.width.toFloat() / displayMapRect.width()
-
-            val scaleY =
-                sourceBitmap.height.toFloat() / displayMapRect.height()
-
             canvas.save()
-            canvas.scale(scaleX, scaleY)
+            canvas.scale(
+                sourceBitmap.width.toFloat() / displayMapRect.width(),
+                sourceBitmap.height.toFloat() / displayMapRect.height()
+            )
 
             overlay.drawExportOverlay(
                 canvas,
@@ -157,7 +142,7 @@ object TacticalMapExporter {
                     0f,
                     footerTop,
                     width.toFloat(),
-                    outputBitmap!!.height.toFloat(),
+                    outputBitmap.height.toFloat(),
                     backgroundPaint
                 )
 
@@ -171,13 +156,7 @@ object TacticalMapExporter {
 
                 var y = footerTop + padding + legendTitleSize
 
-                canvas.drawText(
-                    "DRAWING LEGEND",
-                    padding,
-                    y,
-                    titlePaint
-                )
-
+                canvas.drawText("DRAWING LEGEND", padding, y, titlePaint)
                 y += legendTitleSize * 0.8f
 
                 var x = padding
@@ -185,22 +164,19 @@ object TacticalMapExporter {
                 for (entry in drawingEntries) {
                     val entryLabel = label(entry)
                     val labelWidth = textPaint.measureText(entryLabel)
+                    val totalWidth = swatchSize + textGap + labelWidth + itemGap
 
-                    val totalWidth =
-                        swatchSize + textGap + labelWidth + itemGap
-
-                    if (
-                        x > padding &&
-                        x + totalWidth > width - padding
-                    ) {
+                    if (x > padding && x + totalWidth > width - padding) {
                         x = padding
                         y += rowHeight
                     }
 
                     val centerY = y + rowHeight * 0.25f
 
-                    swatchPaint.color = entry.color
-                    swatchPaint.style = Paint.Style.FILL
+                    swatchPaint.apply {
+                        color = entry.color
+                        style = Paint.Style.FILL
+                    }
 
                     canvas.drawCircle(
                         x + swatchSize / 2f,
@@ -209,9 +185,8 @@ object TacticalMapExporter {
                         swatchPaint
                     )
 
-                    val baseline =
-                        centerY -
-                                (textPaint.ascent() + textPaint.descent()) / 2f
+                    val baseline = centerY -
+                            (textPaint.ascent() + textPaint.descent()) / 2f
 
                     canvas.drawText(
                         entryLabel,
@@ -228,19 +203,12 @@ object TacticalMapExporter {
                 ?: throw IllegalStateException("Cannot open output file")
 
             stream.use {
-                if (
-                    !outputBitmap!!.compress(
-                        Bitmap.CompressFormat.PNG,
-                        100,
-                        it
-                    )
-                ) {
+                if (!outputBitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) {
                     throw IllegalStateException("PNG compression failed")
                 }
             }
 
             true
-
         } catch (e: Exception) {
             Log.e(TAG, "Map export error", e)
             false

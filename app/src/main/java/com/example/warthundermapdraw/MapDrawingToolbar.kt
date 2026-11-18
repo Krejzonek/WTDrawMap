@@ -1,7 +1,9 @@
 package com.example.warthundermapdraw
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
@@ -22,9 +24,7 @@ class MapDrawingToolbar(
     private val onExport: () -> Unit
 ) {
 
-    private fun dp(value: Int): Int {
-        return (value * context.resources.displayMetrics.density).toInt()
-    }
+    private fun dp(value: Int) = (value * context.resources.displayMetrics.density).toInt()
 
     private lateinit var drawButton: TextView
     private lateinit var toolbar: LinearLayout
@@ -68,10 +68,7 @@ class MapDrawingToolbar(
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             setPadding(dp(18), dp(10), dp(18), dp(10))
-            background = createBackground(
-                Color.rgb(21, 31, 45),
-                Color.rgb(65, 91, 120)
-            )
+            background = createBackground(Color.rgb(21, 31, 45), Color.rgb(65, 91, 120))
             elevation = dp(6).toFloat()
             isClickable = true
         }
@@ -80,10 +77,7 @@ class MapDrawingToolbar(
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(5), dp(5), dp(5), dp(5))
-            background = createBackground(
-                Color.rgb(17, 26, 39),
-                Color.rgb(48, 67, 89)
-            )
+            background = createBackground(Color.rgb(17, 26, 39), Color.rgb(48, 67, 89))
             elevation = dp(6).toFloat()
             visibility = View.GONE
         }
@@ -103,13 +97,9 @@ class MapDrawingToolbar(
             isFillViewport = false
             clipChildren = false
             clipToPadding = false
-            background = createBackground(
-                Color.rgb(17, 26, 39),
-                Color.rgb(48, 67, 89)
-            )
+            background = createBackground(Color.rgb(17, 26, 39), Color.rgb(48, 67, 89))
             elevation = dp(7).toFloat()
             visibility = View.GONE
-
             addView(
                 paletteContent,
                 ViewGroup.LayoutParams(
@@ -150,32 +140,10 @@ class MapDrawingToolbar(
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             setPadding(dp(14), dp(10), dp(14), dp(10))
-            background = createBackground(
-                Color.rgb(21, 31, 45),
-                Color.rgb(65, 91, 120)
-            )
+            background = createBackground(Color.rgb(21, 31, 45), Color.rgb(65, 91, 120))
             elevation = dp(6).toFloat()
             isClickable = true
             visibility = View.GONE
-        }
-
-        val toolbarParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM or Gravity.START
-        ).apply {
-            marginStart = dp(12)
-            bottomMargin = dp(58)
-        }
-
-        val paletteParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            dp(48),
-            Gravity.BOTTOM or Gravity.START
-        ).apply {
-            marginStart = dp(12)
-            marginEnd = dp(12)
-            bottomMargin = dp(150)
         }
 
         val actionButtons = LinearLayout(context).apply {
@@ -198,23 +166,45 @@ class MapDrawingToolbar(
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 dp(42)
+            ).apply { marginStart = dp(8) }
+        )
+
+        container.addView(
+            palette,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                dp(48),
+                Gravity.BOTTOM or Gravity.START
             ).apply {
-                marginStart = dp(8)
+                marginStart = dp(12)
+                marginEnd = dp(12)
+                bottomMargin = dp(150)
             }
         )
 
-        val actionParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            dp(42),
-            Gravity.BOTTOM or Gravity.START
-        ).apply {
-            marginStart = dp(12)
-            bottomMargin = dp(10)
-        }
+        container.addView(
+            toolbar,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.START
+            ).apply {
+                marginStart = dp(12)
+                bottomMargin = dp(58)
+            }
+        )
 
-        container.addView(palette, paletteParams)
-        container.addView(toolbar, toolbarParams)
-        container.addView(actionButtons, actionParams)
+        container.addView(
+            actionButtons,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                dp(42),
+                Gravity.BOTTOM or Gravity.START
+            ).apply {
+                marginStart = dp(12)
+                bottomMargin = dp(10)
+            }
+        )
 
         setupListeners()
     }
@@ -231,10 +221,7 @@ class MapDrawingToolbar(
             textSize = 10f
             setTextColor(Color.rgb(190, 205, 220))
             gravity = Gravity.CENTER_VERTICAL
-            setTypeface(
-                android.graphics.Typeface.DEFAULT,
-                android.graphics.Typeface.BOLD
-            )
+            setTypeface(Typeface.DEFAULT, Typeface.BOLD)
         }
 
         brushSizeLabel = TextView(context).apply {
@@ -242,50 +229,35 @@ class MapDrawingToolbar(
             textSize = 10f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setTypeface(
-                android.graphics.Typeface.DEFAULT,
-                android.graphics.Typeface.BOLD
-            )
+            setTypeface(Typeface.DEFAULT, Typeface.BOLD)
         }
 
         brushSizeSeekBar = SeekBar(context).apply {
             max = 9
             progress = (drawingManager.brushSizeDp.toInt() - 1).coerceIn(0, 9)
+            progressTintList = ColorStateList.valueOf(Color.rgb(75, 155, 230))
+            thumbTintList = ColorStateList.valueOf(Color.WHITE)
 
-            progressTintList =
-                android.content.res.ColorStateList.valueOf(
-                    Color.rgb(75, 155, 230)
-                )
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(
+                    seekBar: SeekBar?,
+                    progress: Int,
+                    fromUser: Boolean
+                ) {
+                    if (!drawingAllowed) return
 
-            thumbTintList =
-                android.content.res.ColorStateList.valueOf(Color.WHITE)
-
-            setOnSeekBarChangeListener(
-                object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(
-                        seekBar: SeekBar?,
-                        progress: Int,
-                        fromUser: Boolean
-                    ) {
-                        if (!drawingAllowed) return
-
-                        val size = (progress + 1).toFloat()
-                        drawingManager.brushSizeDp = size
-                        brushSizeLabel.text = "${size.toInt()} dp"
-                        onInvalidate()
-                    }
-
-                    override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                    override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                    val size = (progress + 1).toFloat()
+                    drawingManager.brushSizeDp = size
+                    brushSizeLabel.text = "${size.toInt()} dp"
+                    onInvalidate()
                 }
-            )
+
+                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            })
         }
 
-        brushSizeRow.addView(
-            brushTitle,
-            LinearLayout.LayoutParams(dp(38), dp(34))
-        )
-
+        brushSizeRow.addView(brushTitle, LinearLayout.LayoutParams(dp(38), dp(34)))
         brushSizeRow.addView(
             brushSizeSeekBar,
             LinearLayout.LayoutParams(dp(155), dp(34)).apply {
@@ -293,11 +265,7 @@ class MapDrawingToolbar(
                 marginEnd = dp(7)
             }
         )
-
-        brushSizeRow.addView(
-            brushSizeLabel,
-            LinearLayout.LayoutParams(dp(42), dp(34))
-        )
+        brushSizeRow.addView(brushSizeLabel, LinearLayout.LayoutParams(dp(42), dp(34)))
 
         toolbar.addView(
             brushSizeRow,
@@ -308,48 +276,30 @@ class MapDrawingToolbar(
         )
     }
 
-    private fun createIcon(
-        resource: Int,
-        description: String
-    ): ImageButton {
-        return ImageButton(context).apply {
+    private fun createIcon(resource: Int, description: String) =
+        ImageButton(context).apply {
             layoutParams = LinearLayout.LayoutParams(dp(42), dp(42))
             setImageResource(resource)
-
-            imageTintList =
-                android.content.res.ColorStateList.valueOf(Color.WHITE)
-
+            imageTintList = ColorStateList.valueOf(Color.WHITE)
             scaleType = ImageView.ScaleType.FIT_CENTER
             contentDescription = description
-
             setPadding(dp(10), dp(10), dp(10), dp(10))
-
-            setBackgroundResource(
-                android.R.drawable.list_selector_background
-            )
+            setBackgroundResource(android.R.drawable.list_selector_background)
         }
-    }
 
-    private fun createBackground(
-        backgroundColor: Int,
-        borderColor: Int
-    ): GradientDrawable {
-        return GradientDrawable().apply {
+    private fun createBackground(backgroundColor: Int, borderColor: Int) =
+        GradientDrawable().apply {
             setColor(backgroundColor)
             cornerRadius = dp(9).toFloat()
             setStroke(dp(1), borderColor)
         }
-    }
 
     private fun createPalette() {
         paletteContent.removeAllViews()
 
         colors.forEach { color ->
             val colorView = ImageView(context).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    dp(34),
-                    dp(34)
-                ).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(34), dp(34)).apply {
                     marginStart = dp(5)
                     marginEnd = dp(5)
                 }
@@ -357,13 +307,11 @@ class MapDrawingToolbar(
                 setImageResource(R.drawable.color_circle)
                 setColorFilter(color)
                 scaleType = ImageView.ScaleType.FIT_CENTER
-
                 setPadding(dp(4), dp(4), dp(4), dp(4))
 
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
                     setColor(Color.TRANSPARENT)
-
                     if (color == drawingManager.currentColor) {
                         setStroke(dp(2), Color.WHITE)
                     }
@@ -378,9 +326,7 @@ class MapDrawingToolbar(
 
                     drawingManager.currentColor = color
                     drawingManager.activeTool = MapDrawingManager.Tool.PENCIL
-
                     palette.visibility = View.GONE
-
                     createPalette()
                     updateButtons()
                 }
@@ -389,9 +335,7 @@ class MapDrawingToolbar(
             paletteContent.addView(colorView)
         }
 
-        palette.post {
-            palette.scrollTo(0, 0)
-        }
+        palette.post { palette.scrollTo(0, 0) }
     }
 
     private fun setupListeners() {
@@ -399,16 +343,12 @@ class MapDrawingToolbar(
             if (!drawingAllowed) return@setOnClickListener
 
             val show = toolbar.visibility != View.VISIBLE
-
             toolbar.visibility = if (show) View.VISIBLE else View.GONE
             palette.visibility = View.GONE
 
-            if (!show) {
-                drawingManager.activeTool = MapDrawingManager.Tool.NONE
-            }
+            if (!show) drawingManager.activeTool = MapDrawingManager.Tool.NONE
 
             drawButton.text = if (show) "CLOSE" else "DRAW"
-
             updateButtons()
             onInvalidate()
         }
@@ -417,14 +357,7 @@ class MapDrawingToolbar(
             if (!drawingAllowed) return@setOnClickListener
 
             drawingManager.activeTool = MapDrawingManager.Tool.PENCIL
-
-            palette.visibility =
-                if (palette.visibility == View.VISIBLE) {
-                    View.GONE
-                } else {
-                    View.VISIBLE
-                }
-
+            palette.visibility = if (palette.visibility == View.VISIBLE) View.GONE else View.VISIBLE
             updateButtons()
         }
 
@@ -452,25 +385,17 @@ class MapDrawingToolbar(
             onInvalidate()
         }
 
-        exportButton.setOnClickListener {
-            onExport()
-        }
+        exportButton.setOnClickListener { onExport() }
     }
 
-    /**
-     * Wywołuj po zmianie uprawnienia użytkownika.
-     */
     fun setDrawingAllowed(allowed: Boolean) {
         drawingAllowed = allowed
         drawingManager.setDrawingPermission(allowed)
 
-        if (!allowed) {
-            closeDrawingTools()
-        }
+        if (!allowed) closeDrawingTools()
 
         drawButton.isEnabled = allowed
         drawButton.alpha = if (allowed) 1f else 0.4f
-
         brushSizeSeekBar.isEnabled = allowed
         brushSizeLabel.alpha = if (allowed) 1f else 0.4f
 
@@ -492,24 +417,19 @@ class MapDrawingToolbar(
         eraserButton.alpha = if (drawingAllowed) 1f else 0.35f
 
         pencilButton.setBackgroundColor(
-            if (
-                drawingAllowed &&
-                drawingManager.activeTool == MapDrawingManager.Tool.PENCIL
-            ) activeColor else normalColor
+            if (drawingAllowed && drawingManager.activeTool == MapDrawingManager.Tool.PENCIL) {
+                activeColor
+            } else normalColor
         )
 
         eraserButton.setBackgroundColor(
-            if (
-                drawingAllowed &&
-                drawingManager.activeTool == MapDrawingManager.Tool.ERASER
-            ) activeColor else normalColor
+            if (drawingAllowed && drawingManager.activeTool == MapDrawingManager.Tool.ERASER) {
+                activeColor
+            } else normalColor
         )
 
-        undoButton.alpha =
-            if (drawingManager.canUndo) 1f else 0.4f
-
-        redoButton.alpha =
-            if (drawingManager.canRedo) 1f else 0.4f
+        undoButton.alpha = if (drawingManager.canUndo) 1f else 0.4f
+        redoButton.alpha = if (drawingManager.canRedo) 1f else 0.4f
     }
 
     fun setExportVisible(visible: Boolean) {
@@ -520,9 +440,7 @@ class MapDrawingToolbar(
         toolbar.visibility = View.GONE
         palette.visibility = View.GONE
         drawButton.text = "DRAW"
-
         drawingManager.activeTool = MapDrawingManager.Tool.NONE
-
         updateButtons()
     }
 }

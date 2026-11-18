@@ -32,10 +32,7 @@ class MapOverlayView(
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         textAlign = Paint.Align.CENTER
-        typeface = Typeface.create(
-            "sans-serif-condensed",
-            Typeface.BOLD
-        )
+        typeface = Typeface.create("sans-serif-condensed", Typeface.BOLD)
     }
 
     private val textBackgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -43,11 +40,7 @@ class MapOverlayView(
         style = Paint.Style.FILL
     }
 
-    private var mapData = MapData(
-        emptyList(),
-        emptyList(),
-        false
-    )
+    private var mapData = MapData(emptyList(), emptyList(), false)
 
     fun setMapData(data: MapData) {
         mapData = data
@@ -58,13 +51,7 @@ class MapOverlayView(
         val bitmap = getBitmap() ?: return null
         if (mapImage.drawable == null) return null
 
-        bitmapRect.set(
-            0f,
-            0f,
-            bitmap.width.toFloat(),
-            bitmap.height.toFloat()
-        )
-
+        bitmapRect.set(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
         imageRect.set(bitmapRect)
         mapImage.imageMatrix.mapRect(imageRect)
 
@@ -73,11 +60,11 @@ class MapOverlayView(
             mapImage.top.toFloat() + mapImage.paddingTop
         )
 
-        if (imageRect.width() <= 0f || imageRect.height() <= 0f) {
-            return null
+        return if (imageRect.width() > 0f && imageRect.height() > 0f) {
+            RectF(imageRect)
+        } else {
+            null
         }
-
-        return RectF(imageRect)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -90,94 +77,60 @@ class MapOverlayView(
         drawingManager.draw(canvas, mapRect)
     }
 
-    fun drawExportOverlay(
-        canvas: Canvas,
-        exportRect: RectF
-    ) {
+    fun drawExportOverlay(canvas: Canvas, exportRect: RectF) {
         drawSpawnSectors(canvas, exportRect)
         drawMarkers(canvas, exportRect)
         drawingManager.draw(canvas, exportRect)
     }
 
-    private fun parseColorOrDefault(
-        color: String,
-        defaultColor: Int
-    ): Int {
+    private fun parseColorOrDefault(color: String, defaultColor: Int): Int {
         if (color.isBlank()) return defaultColor
 
         return try {
-            android.graphics.Color.parseColor(
-                if (color.startsWith("#")) color else "#$color"
-            )
+            Color.parseColor(if (color.startsWith("#")) color else "#$color")
         } catch (_: Exception) {
             defaultColor
         }
     }
 
-    private fun drawSpawnSectors(
-        canvas: Canvas,
-        mapRect: RectF
-    ) {
+    private fun drawSpawnSectors(canvas: Canvas, mapRect: RectF) {
         val density = resources.displayMetrics.density
 
         for (sector in mapData.sectors) {
-            val color = parseColorOrDefault(
-                sector.color,
-                Color.rgb(90, 150, 255)
-            )
-
+            val color = parseColorOrDefault(sector.color, Color.rgb(90, 150, 255))
             val hull = convexHull(sector.points)
             if (hull.isEmpty()) continue
 
-            var centerX = 0f
-            var centerY = 0f
+            val centerX = sector.points.sumOf { it.x.toDouble() }.toFloat() /
+                    sector.points.size.coerceAtLeast(1)
+            val centerY = sector.points.sumOf { it.y.toDouble() }.toFloat() /
+                    sector.points.size.coerceAtLeast(1)
 
-            for (point in sector.points) {
-                centerX += point.x
-                centerY += point.y
-            }
-
-            centerX /= sector.points.size.coerceAtLeast(1)
-            centerY /= sector.points.size.coerceAtLeast(1)
-
-            when {
-                hull.size >= 3 -> {
-                    val path = Path()
-
-                    path.moveTo(
-                        mapRect.left + hull[0].x * mapRect.width(),
-                        mapRect.top + hull[0].y * mapRect.height()
-                    )
-
-                    for (i in 1 until hull.size) {
-                        path.lineTo(
-                            mapRect.left + hull[i].x * mapRect.width(),
-                            mapRect.top + hull[i].y * mapRect.height()
-                        )
+            when (hull.size) {
+                1 -> {
+                    paint.apply {
+                        style = Paint.Style.STROKE
+                        this.color = color
+                        alpha = 190
+                        strokeWidth = 0.8f * density
                     }
 
-                    path.close()
-
-                    paint.style = Paint.Style.FILL
-                    paint.color = color
-                    paint.alpha = 10
-                    canvas.drawPath(path, paint)
-
-                    paint.style = Paint.Style.STROKE
-                    paint.color = color
-                    paint.alpha = 190
-                    paint.strokeWidth = 1f * density
-                    paint.pathEffect = null
-
-                    canvas.drawPath(path, paint)
+                    canvas.drawCircle(
+                        mapRect.left + hull[0].x * mapRect.width(),
+                        mapRect.top + hull[0].y * mapRect.height(),
+                        2f * density,
+                        paint
+                    )
                 }
 
-                hull.size == 2 -> {
-                    paint.style = Paint.Style.STROKE
-                    paint.color = color
-                    paint.alpha = 190
-                    paint.strokeWidth = 1f * density
-                    paint.strokeCap = Paint.Cap.ROUND
+                2 -> {
+                    paint.apply {
+                        style = Paint.Style.STROKE
+                        this.color = color
+                        alpha = 190
+                        strokeWidth = density
+                        strokeCap = Paint.Cap.ROUND
+                    }
 
                     canvas.drawLine(
                         mapRect.left + hull[0].x * mapRect.width(),
@@ -188,47 +141,61 @@ class MapOverlayView(
                     )
                 }
 
-                hull.size == 1 -> {
-                    paint.style = Paint.Style.STROKE
-                    paint.color = color
-                    paint.alpha = 190
-                    paint.strokeWidth = 0.8f * density
+                else -> {
+                    val path = Path().apply {
+                        moveTo(
+                            mapRect.left + hull[0].x * mapRect.width(),
+                            mapRect.top + hull[0].y * mapRect.height()
+                        )
 
-                    canvas.drawCircle(
-                        mapRect.left + hull[0].x * mapRect.width(),
-                        mapRect.top + hull[0].y * mapRect.height(),
-                        2f * density,
-                        paint
+                        for (i in 1 until hull.size) {
+                            lineTo(
+                                mapRect.left + hull[i].x * mapRect.width(),
+                                mapRect.top + hull[i].y * mapRect.height()
+                            )
+                        }
+
+                        close()
+                    }
+
+                    paint.apply {
+                        style = Paint.Style.FILL
+                        this.color = color
+                        alpha = 10
+                    }
+                    canvas.drawPath(path, paint)
+
+                    paint.apply {
+                        style = Paint.Style.STROKE
+                        alpha = 190
+                        strokeWidth = density
+                        pathEffect = null
+                    }
+                    canvas.drawPath(path, paint)
+
+                    val bounds = RectF(
+                        mapRect.left + hull.minOf { it.x } * mapRect.width(),
+                        mapRect.top + hull.minOf { it.y } * mapRect.height(),
+                        mapRect.left + hull.maxOf { it.x } * mapRect.width(),
+                        mapRect.top + hull.maxOf { it.y } * mapRect.height()
+                    )
+
+                    drawFitLabel(
+                        canvas,
+                        sector.type,
+                        mapRect.left + centerX * mapRect.width(),
+                        mapRect.top + centerY * mapRect.height(),
+                        bounds,
+                        10f * density
                     )
                 }
-            }
-
-            if (hull.size >= 3) {
-                val bounds = RectF(
-                    mapRect.left + hull.minOf { it.x } * mapRect.width(),
-                    mapRect.top + hull.minOf { it.y } * mapRect.height(),
-                    mapRect.left + hull.maxOf { it.x } * mapRect.width(),
-                    mapRect.top + hull.maxOf { it.y } * mapRect.height()
-                )
-
-                drawFitLabel(
-                    canvas,
-                    sector.type,
-                    mapRect.left + centerX * mapRect.width(),
-                    mapRect.top + centerY * mapRect.height(),
-                    bounds,
-                    10f * density
-                )
             }
         }
 
         paint.pathEffect = null
     }
 
-    private fun drawMarkers(
-        canvas: Canvas,
-        mapRect: RectF
-    ) {
+    private fun drawMarkers(canvas: Canvas, mapRect: RectF) {
         val density = resources.displayMetrics.density
 
         for (marker in mapData.markers) {
@@ -240,39 +207,30 @@ class MapOverlayView(
                     drawUnitIcon(canvas, x, y, marker, density)
 
                     if (marker.label.isNotBlank()) {
-                        textPaint.color = Color.BLACK
-                        textPaint.style = Paint.Style.FILL
-                        textPaint.textSize = 12f * density
-                        textPaint.textAlign = Paint.Align.CENTER
-                        textPaint.typeface = Typeface.create(
-                            Typeface.DEFAULT,
-                            Typeface.BOLD
-                        )
-
-                        val textY =
-                            y - (textPaint.ascent() + textPaint.descent()) / 2f
+                        textPaint.apply {
+                            color = Color.BLACK
+                            style = Paint.Style.FILL
+                            textSize = 12f * density
+                            textAlign = Paint.Align.CENTER
+                            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                        }
 
                         canvas.drawText(
                             marker.label,
                             x,
-                            textY,
+                            y - (textPaint.ascent() + textPaint.descent()) / 2f,
                             textPaint
                         )
                     }
                 }
 
-                MarkerType.AIRFIELD -> {
-                    drawUnitIcon(canvas, x, y, marker, density)
-                }
+                MarkerType.AIRFIELD,
+                MarkerType.PLAYER_UNIT -> drawUnitIcon(canvas, x, y, marker, density)
 
                 MarkerType.GROUND_UNIT -> {
                     if (!mapData.isAirView) {
                         drawUnitIcon(canvas, x, y, marker, density)
                     }
-                }
-
-                MarkerType.PLAYER_UNIT -> {
-                    drawUnitIcon(canvas, x, y, marker, density)
                 }
 
                 MarkerType.AIR_UNIT -> {
@@ -292,7 +250,6 @@ class MapOverlayView(
         density: Float
     ) {
         val resourceId = MapIconProvider.getIconRes(marker.iconName)
-
         val drawable = drawableCache.getOrPut(resourceId) {
             try {
                 context.getDrawable(resourceId)?.mutate()
@@ -307,9 +264,7 @@ class MapOverlayView(
         val size = when (marker.iconName) {
             "capture_zone" -> 19f
             "airfield" -> 23f
-            "Battleship", "Battlecruiser" ->
-                if (isPlayer) 10f else 9f
-
+            "Battleship", "Battlecruiser" -> if (isPlayer) 10f else 9f
             "Bomber" -> if (isPlayer) 9f else 8f
             "Player" -> 7.3f
             else -> if (isPlayer) 7.3f else 6.3f
@@ -319,41 +274,27 @@ class MapOverlayView(
             "Ship", "TorpedoBoat", "Frigate", "Gunboat",
             "Destroyer", "Cruiser", "LightCruiser", "HeavyCruiser",
             "Battleship", "Battlecruiser" -> 0.72f
-
             else -> 0.78f
         }
 
-        val height = size
-
-        val directionLength = hypot(
-            marker.directionX,
-            marker.directionY
-        )
-
-        val directionX =
-            if (directionLength > 0.001f) marker.directionX else 0f
-
-        val directionY =
-            if (directionLength > 0.001f) marker.directionY else -1f
+        val directionLength = hypot(marker.directionX, marker.directionY)
+        val directionX = if (directionLength > 0.001f) marker.directionX else 0f
+        val directionY = if (directionLength > 0.001f) marker.directionY else -1f
 
         val angle = Math.toDegrees(
-            atan2(
-                directionY.toDouble(),
-                directionX.toDouble()
-            )
+            atan2(directionY.toDouble(), directionX.toDouble())
         ).toFloat() + 90f
 
         val left = -width / 2f
-        val top = -height / 2f
+        val top = -size / 2f
         val right = width / 2f
-        val bottom = height / 2f
+        val bottom = size / 2f
         val outline = 0.7f * density
 
         canvas.save()
         canvas.translate(x, y)
 
-        if (
-            marker.type == MarkerType.GROUND_UNIT ||
+        if (marker.type == MarkerType.GROUND_UNIT ||
             marker.type == MarkerType.AIR_UNIT ||
             marker.type == MarkerType.PLAYER_UNIT
         ) {
@@ -366,18 +307,11 @@ class MapOverlayView(
             (right + outline).toInt(),
             (bottom + outline).toInt()
         )
-
         drawable.setTint(Color.BLACK)
         drawable.alpha = 255
         drawable.draw(canvas)
 
-        drawable.setBounds(
-            left.toInt(),
-            top.toInt(),
-            right.toInt(),
-            bottom.toInt()
-        )
-
+        drawable.setBounds(left.toInt(), top.toInt(), right.toInt(), bottom.toInt())
         drawable.setTint(marker.color)
         drawable.alpha = 255
         drawable.draw(canvas)
@@ -398,23 +332,19 @@ class MapOverlayView(
         val density = resources.displayMetrics.density
         val horizontalPadding = 3f * density
         val verticalPadding = 2f * density
-
-        val availableWidth =
-            bounds.width() - horizontalPadding * 2f
-
-        val availableHeight =
-            bounds.height() - verticalPadding * 2f
+        val availableWidth = bounds.width() - horizontalPadding * 2f
+        val availableHeight = bounds.height() - verticalPadding * 2f
 
         if (availableWidth <= 0f || availableHeight <= 0f) return
 
-        textPaint.textSize = maxTextSize
-        textPaint.style = Paint.Style.FILL
+        textPaint.apply {
+            textSize = maxTextSize
+            style = Paint.Style.FILL
+        }
 
         val initialWidth = textPaint.measureText(text)
         val initialMetrics = textPaint.fontMetrics
-
-        val initialHeight =
-            initialMetrics.descent - initialMetrics.ascent
+        val initialHeight = initialMetrics.descent - initialMetrics.ascent
 
         if (initialWidth <= 0f || initialHeight <= 0f) return
 
@@ -430,15 +360,8 @@ class MapOverlayView(
         val baseline = y - (metrics.ascent + metrics.descent) / 2f
         val textWidth = textPaint.measureText(text)
 
-        val paddingX = minOf(
-            horizontalPadding,
-            availableWidth * 0.08f
-        )
-
-        val paddingY = minOf(
-            verticalPadding,
-            availableHeight * 0.08f
-        )
+        val paddingX = minOf(horizontalPadding, availableWidth * 0.08f)
+        val paddingY = minOf(verticalPadding, availableHeight * 0.08f)
 
         val background = RectF(
             x - textWidth / 2f - paddingX,
@@ -447,8 +370,7 @@ class MapOverlayView(
             baseline + metrics.descent + paddingY
         )
 
-        if (
-            background.left < bounds.left ||
+        if (background.left < bounds.left ||
             background.right > bounds.right ||
             background.top < bounds.top ||
             background.bottom > bounds.bottom
@@ -461,33 +383,26 @@ class MapOverlayView(
             textBackgroundPaint
         )
 
-        textPaint.style = Paint.Style.STROKE
-        textPaint.strokeWidth = 1.5f * density * scale
-        textPaint.strokeJoin = Paint.Join.ROUND
-        textPaint.color = Color.BLACK
-
+        textPaint.apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.5f * density * scale
+            strokeJoin = Paint.Join.ROUND
+            color = Color.BLACK
+        }
         canvas.drawText(text, x, baseline, textPaint)
 
-        textPaint.style = Paint.Style.FILL
-        textPaint.color = Color.WHITE
-
+        textPaint.apply {
+            style = Paint.Style.FILL
+            color = Color.WHITE
+        }
         canvas.drawText(text, x, baseline, textPaint)
     }
 
-    private fun convexHull(
-        points: List<SpawnPoint>
-    ): List<android.graphics.PointF> {
+    private fun convexHull(points: List<SpawnPoint>): List<android.graphics.PointF> {
         val sorted = points
-            .map {
-                android.graphics.PointF(it.x, it.y)
-            }
-            .distinctBy {
-                "${it.x}:${it.y}"
-            }
-            .sortedWith(
-                compareBy<android.graphics.PointF> { it.x }
-                    .thenBy { it.y }
-            )
+            .map { android.graphics.PointF(it.x, it.y) }
+            .distinctBy { "${it.x}:${it.y}" }
+            .sortedWith(compareBy<android.graphics.PointF> { it.x }.thenBy { it.y })
 
         if (sorted.size <= 2) return sorted
 
@@ -496,41 +411,26 @@ class MapOverlayView(
             a: android.graphics.PointF,
             b: android.graphics.PointF
         ): Float {
-            return (a.x - o.x) * (b.y - o.y) -
-                    (a.y - o.y) * (b.x - o.x)
+            return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
         }
 
         val lower = mutableListOf<android.graphics.PointF>()
-
         for (point in sorted) {
-            while (
-                lower.size >= 2 &&
-                cross(
-                    lower[lower.size - 2],
-                    lower[lower.size - 1],
-                    point
-                ) <= 0f
+            while (lower.size >= 2 &&
+                cross(lower[lower.size - 2], lower[lower.size - 1], point) <= 0f
             ) {
                 lower.removeAt(lower.lastIndex)
             }
-
             lower.add(point)
         }
 
         val upper = mutableListOf<android.graphics.PointF>()
-
         for (point in sorted.asReversed()) {
-            while (
-                upper.size >= 2 &&
-                cross(
-                    upper[upper.size - 2],
-                    upper[upper.size - 1],
-                    point
-                ) <= 0f
+            while (upper.size >= 2 &&
+                cross(upper[upper.size - 2], upper[upper.size - 1], point) <= 0f
             ) {
                 upper.removeAt(upper.lastIndex)
             }
-
             upper.add(point)
         }
 
