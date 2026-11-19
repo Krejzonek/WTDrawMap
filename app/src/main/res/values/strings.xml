@@ -1,11 +1,3 @@
 <resources>
     <string name="app_name">WarThunderMapDraw</string>
-    <string-array name="SelectMach">
-        <item>Domination</item>
-        <item>Conquest</item>
-        <item>Battle</item>
-        <item>Break</item>
-        <item>Skirmish</item>
-        <item>Saved</item>
-    </string-array>
 </resources>

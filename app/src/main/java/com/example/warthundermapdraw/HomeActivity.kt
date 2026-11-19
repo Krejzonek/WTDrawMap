@@ -22,6 +22,7 @@ class HomeActivity : AppCompatActivity() {
         private const val PREFS_NAME = "WarThunderPreferences"
         private const val KEY_USERNAME = "username"
         private const val DEFAULT_USERNAME = "User"
+        private const val MAX_PARTICIPANTS = 8
         private const val DATABASE_URL =
             "https://wt-tactical-map-5f0fb-default-rtdb.europe-west1.firebasedatabase.app/"
     }
@@ -32,7 +33,6 @@ class HomeActivity : AppCompatActivity() {
 
     private val auth = FirebaseAuth.getInstance()
     private val database = FirebaseDatabase.getInstance(DATABASE_URL).reference
-
     private var username = DEFAULT_USERNAME
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -228,27 +228,72 @@ class HomeActivity : AppCompatActivity() {
                 return
             }
 
-            database.child("rooms").child(code)
-                .get()
-                .addOnSuccessListener { snapshot ->
-                    if (!snapshot.exists()) {
+            val room = database.child("rooms").child(code)
+
+            room.child("host").get()
+                .addOnSuccessListener { hostSnapshot ->
+                    val hostUid = hostSnapshot.getValue(String::class.java)
+
+                    if (hostUid.isNullOrBlank()) {
                         onFailure("Session does not exist")
                         return@addOnSuccessListener
                     }
 
-                    val active = snapshot.child("active").getValue(Boolean::class.java) ?: false
-                    val host = snapshot.child("host").getValue(String::class.java)
+                    room.child("active").get()
+                        .addOnSuccessListener { activeSnapshot ->
+                            val active = activeSnapshot.getValue(Boolean::class.java) == true
 
-                    if (!active || host.isNullOrBlank()) {
-                        onFailure("Session does not exist or is already closed")
-                    } else if (snapshot.child("bans").hasChild(uid)) {
-                        onFailure("You are banned from this session")
-                    } else {
-                        onSuccess()
-                    }
+                            if (!active) {
+                                onFailure("Session is closed")
+                                return@addOnSuccessListener
+                            }
+
+                            room.child("bans").child(uid).get()
+                                .addOnSuccessListener { banSnapshot ->
+                                    if (banSnapshot.exists()) {
+                                        onFailure("You are banned from this session")
+                                        return@addOnSuccessListener
+                                    }
+
+                                    room.child("members").get()
+                                        .addOnSuccessListener { membersSnapshot ->
+                                            val memberCount = membersSnapshot.childrenCount.toInt()
+                                            val alreadyMember = membersSnapshot.hasChild(uid)
+
+                                            if (memberCount >= MAX_PARTICIPANTS && !alreadyMember) {
+                                                onFailure("Session is full (8/8 players)")
+                                                return@addOnSuccessListener
+                                            }
+
+                                            if (!membersSnapshot.hasChild(hostUid)) {
+                                                onFailure("Invalid session: host is not in the session")
+                                                return@addOnSuccessListener
+                                            }
+
+                                            onSuccess()
+                                        }
+                                        .addOnFailureListener { error ->
+                                            onFailure(
+                                                "Could not check session participants: ${error.message ?: "Firebase error"}"
+                                            )
+                                        }
+                                }
+                                .addOnFailureListener { error ->
+                                    onFailure(
+                                        "Could not check session access: ${error.message ?: "Firebase error"}"
+                                    )
+                                }
+                        }
+                        .addOnFailureListener { error ->
+                            onFailure(
+                                "Could not check session status: ${error.message ?: "Firebase error"}"
+                            )
+                        }
                 }
                 .addOnFailureListener { error ->
-                    onFailure("Could not verify session: ${error.message ?: "Firebase error"}")
+                    onFailure(
+                        "Could not verify session: ${error.message ?: "Firebase error"}"
+                    )
                 }
         }
 
@@ -256,9 +301,13 @@ class HomeActivity : AppCompatActivity() {
             checkWithAuthenticatedUser()
         } else {
             auth.signInAnonymously()
-                .addOnSuccessListener { checkWithAuthenticatedUser() }
+                .addOnSuccessListener {
+                    checkWithAuthenticatedUser()
+                }
                 .addOnFailureListener { error ->
-                    onFailure("Authentication failed: ${error.message ?: "Firebase error"}")
+                    onFailure(
+                        "Authentication failed: ${error.message ?: "Firebase error"}"
+                    )
                 }
         }
     }

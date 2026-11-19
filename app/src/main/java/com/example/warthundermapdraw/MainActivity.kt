@@ -36,7 +36,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "WarThunderScanner"
-        private const val UPDATE_INTERVAL = 200L
+        private const val UPDATE_INTERVAL = 500L
         private const val MIN_ZOOM = 1f
         private const val MAX_ZOOM = 5f
     }
@@ -82,6 +82,9 @@ class MainActivity : AppCompatActivity() {
 
     private var currentMapData = MapData(emptyList(), emptyList(), false)
 
+    private var lastLegendSignature = ""
+    private var lastDrawingLegendSignature = ""
+
     private var zoom = 1f
     private var translateX = 0f
     private var translateY = 0f
@@ -90,10 +93,12 @@ class MainActivity : AppCompatActivity() {
     private var isDragging = false
 
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
+    private val mapProcessingExecutor = Executors.newSingleThreadExecutor()
     private var updateTask: ScheduledFuture<*>? = null
 
     @Volatile private var isDiscovering = false
     @Volatile private var isLoading = false
+    @Volatile private var isActivityDestroyed = false
 
     private var deviceSelectionDialog: AlertDialog? = null
     private var deviceSelectionDialogShowing = false
@@ -489,6 +494,8 @@ class MainActivity : AppCompatActivity() {
         hasActiveSession = activeSessionCode.isNotBlank()
 
         sessionCodeView.post {
+            if (isActivityDestroyed) return@post
+
             sessionCodeView.apply {
                 visibility = if (activeSessionCode.isBlank()) View.GONE else View.VISIBLE
                 if (activeSessionCode.isNotBlank()) text = "CODE: $activeSessionCode"
@@ -519,7 +526,7 @@ class MainActivity : AppCompatActivity() {
     private fun initializeDrawing() {
         drawingManager.onDrawingChanged = {
             runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (isFinishing || isDestroyed || isActivityDestroyed) return@runOnUiThread
 
                 updateDrawingLegend()
                 if (::drawingToolbar.isInitialized) drawingToolbar.updateButtons()
@@ -550,8 +557,15 @@ class MainActivity : AppCompatActivity() {
     private fun updateDrawingLegend() {
         if (!::drawingLegend.isInitialized) return
 
-        drawingLegend.removeAllViews()
         val entries = drawingManager.getLegendEntries()
+        val signature = entries.joinToString("|") {
+            "${it.color}:${it.colorName}:${it.description}"
+        }
+
+        if (signature == lastDrawingLegendSignature) return
+        lastDrawingLegendSignature = signature
+
+        drawingLegend.removeAllViews()
 
         if (entries.isEmpty()) {
             drawingLegendScroll.visibility = View.INVISIBLE
@@ -579,7 +593,7 @@ class MainActivity : AppCompatActivity() {
                     shape = GradientDrawable.OVAL
                     setColor(entry.color)
                     if (entry.color == Color.WHITE) {
-                        setStroke((density).toInt(), Color.LTGRAY)
+                        setStroke(density.toInt(), Color.LTGRAY)
                     }
                 }
                 layoutParams = LinearLayout.LayoutParams(
@@ -695,7 +709,7 @@ class MainActivity : AppCompatActivity() {
 
                 override fun onStatus(message: String) {
                     runOnUiThread {
-                        if (!isReturningHome) updateStatus(message)
+                        if (!isReturningHome && !isActivityDestroyed) updateStatus(message)
                     }
                 }
 
@@ -750,39 +764,65 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 override fun onMapReceived(info: JSONObject, objects: JSONObject, image: ByteArray?) {
-                    runOnUiThread {
-                        if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
+                    if (isActivityDestroyed) return
 
-                        if (!info.optBoolean("valid", false)) {
-                            clearMap()
-                            updateMapHint("Waiting for a battle...")
-                            updateStatus("Host is waiting for a battle...")
-                            return@runOnUiThread
+                    val infoCopy = JSONObject(info.toString())
+                    val objectsCopy = JSONObject(objects.toString())
+                    val imageCopy = image?.copyOf()
+
+                    mapProcessingExecutor.execute {
+                        val decodedBitmap = if (imageCopy != null && imageCopy.isNotEmpty()) {
+                            BitmapFactory.decodeByteArray(imageCopy, 0, imageCopy.size)
+                        } else {
+                            null
                         }
 
-                        val sharedKey = drawingManager.createMapKey("shared", info)
-                        if (drawingManager.switchLayer(sharedKey)) {
-                            drawingToolbar.updateButtons()
-                            mapOverlay.invalidate()
-                        }
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed || isReturningHome || isActivityDestroyed) {
+                                decodedBitmap?.recycle()
+                                return@runOnUiThread
+                            }
 
-                        image?.takeIf { it.isNotEmpty() }?.let {
-                            BitmapFactory.decodeByteArray(it, 0, it.size)?.let(::setMapBitmap)
-                        }
+                            if (!infoCopy.optBoolean("valid", false)) {
+                                decodedBitmap?.recycle()
+                                clearMap()
+                                updateMapHint("Waiting for a battle...")
+                                updateStatus("Host is waiting for a battle...")
+                                return@runOnUiThread
+                            }
 
-                        applyReceivedObjects(objects)
-                        updateMapHint(if (currentBitmap != null) "" else "Loading map...")
-                        updateStatus(
-                            if (currentBitmap != null) "Connected: Host"
-                            else "Receiving map from host..."
-                        )
+                            val sharedKey = drawingManager.createMapKey("shared", infoCopy)
+                            if (drawingManager.switchLayer(sharedKey)) {
+                                drawingToolbar.updateButtons()
+                                mapOverlay.invalidate()
+                            }
+
+                            if (decodedBitmap != null) {
+                                setMapBitmap(decodedBitmap)
+                            }
+
+                            applyReceivedObjects(objectsCopy)
+                            updateMapHint(if (currentBitmap != null) "" else "Loading map...")
+                            updateStatus(
+                                if (currentBitmap != null) "Connected: Host"
+                                else "Receiving map from host..."
+                            )
+                        }
                     }
                 }
 
                 override fun onObjectsReceived(objects: JSONObject) {
-                    runOnUiThread {
-                        if (!isFinishing && !isDestroyed && !isReturningHome) {
-                            applyReceivedObjects(objects)
+                    if (isActivityDestroyed) return
+
+                    val objectsCopy = JSONObject(objects.toString())
+
+                    mapProcessingExecutor.execute {
+                        val parsed = WarThunderMapParser.parse(objectsCopy)
+
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed && !isReturningHome && !isActivityDestroyed) {
+                                applyParsedObjects(objectsCopy, parsed)
+                            }
                         }
                     }
                 }
@@ -804,9 +844,11 @@ class MainActivity : AppCompatActivity() {
                         return
                     }
 
+                    val messageCopy = JSONObject(message.toString())
+
                     runOnUiThread {
-                        if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
-                        drawingManager.applyRemoteMessage(message)
+                        if (isFinishing || isDestroyed || isReturningHome || isActivityDestroyed) return@runOnUiThread
+                        drawingManager.applyRemoteMessage(messageCopy)
                     }
                 }
 
@@ -832,22 +874,20 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 override fun onDrawingChannelReady(uid: String) {
-                    if (!isHost) return
+                    if (!isHost || isActivityDestroyed) return
 
                     runOnUiThread {
-                        if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
+                        if (isFinishing || isDestroyed || isReturningHome || isActivityDestroyed) {
+                            return@runOnUiThread
+                        }
 
-                        val info = lastMapInfo
-                        val objects = lastMapObjects
+                        val info = lastMapInfo?.let { JSONObject(it.toString()) }
+                        val objects = lastMapObjects?.let { JSONObject(it.toString()) }
+                        val mapImage = lastMapImage?.copyOf()
 
                         if (info != null && objects != null) {
                             Log.d(TAG, "Sending current map to new participant: $uid")
-                            multiplayer.sendMap(
-                                JSONObject(info.toString()),
-                                JSONObject(objects.toString()),
-                                lastMapImage?.copyOf(),
-                                uid
-                            )
+                            multiplayer.sendMap(info, objects, mapImage, uid)
                         }
 
                         multiplayer.sendDrawingMessage(drawingManager.createSnapshot(), uid)
@@ -856,7 +896,7 @@ class MainActivity : AppCompatActivity() {
 
                 override fun onError(message: String) {
                     runOnUiThread {
-                        if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
+                        if (isFinishing || isDestroyed || isReturningHome || isActivityDestroyed) return@runOnUiThread
                         updateStatus(message)
                         ToastMessage(message)
                     }
@@ -866,7 +906,7 @@ class MainActivity : AppCompatActivity() {
 
         multiplayer.initialize { success ->
             runOnUiThread {
-                if (!success || isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
+                if (!success || isFinishing || isDestroyed || isReturningHome || isActivityDestroyed) return@runOnUiThread
 
                 drawingManager.setLocalAuthor(multiplayer.getLocalUid(), username)
 
@@ -901,12 +941,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startSearching() {
-        if (!isHost || isReturningHome) return
+        if (!isHost || isReturningHome || isActivityDestroyed) return
 
         updateTask?.cancel(false)
         updateTask = scheduler.scheduleWithFixedDelay({
             try {
-                if (isReturningHome || isFinishing || isDestroyed) return@scheduleWithFixedDelay
+                if (isReturningHome || isFinishing || isDestroyed || isActivityDestroyed) {
+                    return@scheduleWithFixedDelay
+                }
 
                 val client = apiClient ?: return@scheduleWithFixedDelay
                 if (client.getServerAddress() == null) discoverServer() else loadMap()
@@ -918,13 +960,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun discoverServer() {
         val client = apiClient ?: return
-        if (isDiscovering || deviceSelectionDialogShowing || isReturningHome) return
+        if (isDiscovering || deviceSelectionDialogShowing || isReturningHome || isActivityDestroyed) return
 
         isDiscovering = true
         client.discover { devices ->
             runOnUiThread {
                 isDiscovering = false
-                if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
+                if (isFinishing || isDestroyed || isReturningHome || isActivityDestroyed) return@runOnUiThread
 
                 if (devices.isEmpty()) {
                     updateStatus("Searching for War Thunder...")
@@ -936,7 +978,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showDeviceSelectionDialog(devices: List<WarThunderApiClient.ServerDevice>) {
-        if (isFinishing || isDestroyed || devices.isEmpty() || isReturningHome) return
+        if (isFinishing || isDestroyed || devices.isEmpty() || isReturningHome || isActivityDestroyed) return
 
         deviceSelectionDialog?.dismiss()
         deviceSelectionDialogShowing = true
@@ -966,6 +1008,8 @@ class MainActivity : AppCompatActivity() {
                     lastMapImage = null
                     lastSentMapKey = ""
                     lastSentObjectsJson = ""
+                    lastLegendSignature = ""
+                    lastDrawingLegendSignature = ""
 
                     updateStatus("Connected: ${device.name}")
                     updateMapHint("Waiting for a battle...")
@@ -1001,7 +1045,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun changeDevice() {
-        if (!isHost || isReturningHome) return
+        if (!isHost || isReturningHome || isActivityDestroyed) return
 
         deviceSelectionDialog?.dismiss()
         deviceSelectionDialog = null
@@ -1016,6 +1060,8 @@ class MainActivity : AppCompatActivity() {
         lastMapInfo = null
         lastMapObjects = null
         lastMapImage = null
+        lastLegendSignature = ""
+        lastDrawingLegendSignature = ""
 
         clearMap()
         updateStatus("Searching for War Thunder...")
@@ -1025,13 +1071,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadMap() {
         val client = apiClient ?: return
-        if (isLoading || isReturningHome) return
+        if (isLoading || isReturningHome || isActivityDestroyed) return
 
         isLoading = true
         client.loadMap { data ->
+            if (isActivityDestroyed) {
+                isLoading = false
+                return@loadMap
+            }
+
             runOnUiThread {
                 isLoading = false
-                if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
+                if (isFinishing || isDestroyed || isReturningHome || isActivityDestroyed) return@runOnUiThread
 
                 if (data != null && data.address != client.getServerAddress()) return@runOnUiThread
 
@@ -1077,45 +1128,70 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                if (data.image != null) {
-                    val shouldUpdateImage = !hasLoadedImage ||
-                            generation != lastGeneration ||
-                            hudType != lastHudType
+                val shouldUpdateImage = data.image != null && (
+                        !hasLoadedImage ||
+                                generation != lastGeneration ||
+                                hudType != lastHudType
+                        )
 
-                    if (shouldUpdateImage) {
-                        BitmapFactory.decodeByteArray(data.image, 0, data.image.size)?.let { bitmap ->
-                            setMapBitmap(bitmap)
-                            lastGeneration = generation
-                            lastHudType = hudType
-                            lastMapImage = data.image.copyOf()
+                if (shouldUpdateImage) {
+                    val imageBytes = data.image
+                    if (imageBytes != null) {
+                        mapProcessingExecutor.execute {
+                            val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
 
-                            val mapKey = "$generation:$hudType"
-                            if (lastSentMapKey != mapKey) {
-                                multiplayer.sendMap(data.info, data.objects, data.image)
-                                lastSentMapKey = mapKey
-                                lastSentObjectsJson = data.objects.toString()
+                            runOnUiThread {
+                                if (isFinishing || isDestroyed || isReturningHome || isActivityDestroyed) {
+                                    bitmap?.recycle()
+                                    return@runOnUiThread
+                                }
+
+                                if (bitmap != null) {
+                                    setMapBitmap(bitmap)
+                                    lastGeneration = generation
+                                    lastHudType = hudType
+                                    lastMapImage = imageBytes.copyOf()
+
+                                    val mapKey = "$generation:$hudType"
+                                    if (lastSentMapKey != mapKey) {
+                                        multiplayer.sendMap(data.info, data.objects, imageBytes)
+                                        lastSentMapKey = mapKey
+                                        lastSentObjectsJson = data.objects.toString()
+                                    }
+                                }
                             }
                         }
-                    } else if (lastMapImage == null) {
-                        lastMapImage = data.image.copyOf()
+                    }
+                } else if (lastMapImage == null && data.image != null) {
+                    lastMapImage = data.image.copyOf()
+                }
+
+                val objectsCopy = JSONObject(data.objects.toString())
+                mapProcessingExecutor.execute {
+                    val parsed = WarThunderMapParser.parse(objectsCopy)
+
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || isReturningHome || isActivityDestroyed) {
+                            return@runOnUiThread
+                        }
+
+                        currentMapData = parsed
+                        mapOverlay.setMapData(parsed)
+                        updateLegend(parsed)
+                        updateDrawingLegend()
+                        drawingToolbar.updateButtons()
+                        mapOverlay.invalidate()
+
+                        val objectsJson = objectsCopy.toString()
+                        if (objectsJson != lastSentObjectsJson) {
+                            lastSentObjectsJson = objectsJson
+                            multiplayer.sendObjects(objectsCopy)
+                        }
+
+                        updateMapHint(if (currentBitmap != null) "" else "Loading map...")
+                        updateStatus("Connected: ${getSelectedDeviceName(data.address)}")
                     }
                 }
-
-                currentMapData = WarThunderMapParser.parse(data.objects)
-                mapOverlay.setMapData(currentMapData)
-                updateLegend(currentMapData)
-                updateDrawingLegend()
-                drawingToolbar.updateButtons()
-                mapOverlay.invalidate()
-
-                val objectsJson = data.objects.toString()
-                if (objectsJson != lastSentObjectsJson) {
-                    lastSentObjectsJson = objectsJson
-                    multiplayer.sendObjects(data.objects)
-                }
-
-                updateMapHint(if (currentBitmap != null) "" else "Loading map...")
-                updateStatus("Connected: ${getSelectedDeviceName(data.address)}")
             }
         }
     }
@@ -1129,6 +1205,7 @@ class MainActivity : AppCompatActivity() {
         resetMapTransform()
 
         image.post {
+            if (isActivityDestroyed) return@post
             applyMapTransform()
             mapOverlay.invalidate()
         }
@@ -1139,9 +1216,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyReceivedObjects(objects: JSONObject) {
-        currentMapData = WarThunderMapParser.parse(objects)
-        mapOverlay.setMapData(currentMapData)
-        updateLegend(currentMapData)
+        val objectsCopy = JSONObject(objects.toString())
+
+        mapProcessingExecutor.execute {
+            val parsed = WarThunderMapParser.parse(objectsCopy)
+
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed && !isReturningHome && !isActivityDestroyed) {
+                    applyParsedObjects(objectsCopy, parsed)
+                }
+            }
+        }
+    }
+
+    private fun applyParsedObjects(objects: JSONObject, parsed: MapData) {
+        currentMapData = parsed
+        mapOverlay.setMapData(parsed)
+        updateLegend(parsed)
         drawingToolbar.updateButtons()
         mapOverlay.invalidate()
     }
@@ -1150,12 +1241,19 @@ class MainActivity : AppCompatActivity() {
         address.removePrefix("http://").substringBefore(":")
 
     private fun updateLegend(data: MapData) {
-        mapLegend.removeAllViews()
-
         val visibleUnits = data.markers.filter {
             if (data.isAirView) it.type == MarkerType.AIR_UNIT
             else it.type == MarkerType.GROUND_UNIT
         }.distinctBy { it.iconName }
+
+        val signature = visibleUnits
+            .sortedBy { it.iconName }
+            .joinToString("|") { "${it.iconName}:${it.color}" }
+
+        if (signature == lastLegendSignature) return
+        lastLegendSignature = signature
+
+        mapLegend.removeAllViews()
 
         if (visibleUnits.isEmpty()) {
             mapLegendScroll.visibility = View.INVISIBLE
@@ -1240,6 +1338,9 @@ class MainActivity : AppCompatActivity() {
 
         currentMapData = MapData(emptyList(), emptyList(), false)
         mapOverlay.setMapData(currentMapData)
+
+        lastLegendSignature = ""
+        lastDrawingLegendSignature = ""
 
         updateLegend(currentMapData)
         updateDrawingLegend()
@@ -1375,11 +1476,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        isActivityDestroyed = true
+
         deviceSelectionDialog?.dismiss()
         updateTask?.cancel(true)
         scheduler.shutdownNow()
+        mapProcessingExecutor.shutdownNow()
         apiClient?.shutdown()
+
         if (::multiplayer.isInitialized) multiplayer.shutdown()
+
+        currentBitmap?.let {
+            if (!it.isRecycled) it.recycle()
+        }
+        currentBitmap = null
+
         super.onDestroy()
     }
 }

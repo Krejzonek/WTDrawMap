@@ -26,6 +26,8 @@ import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -40,6 +42,10 @@ class MultiplayerSessionManager(
     private val context: Context,
     private val listener: Listener
 ) {
+    private val peerCloseExecutor = Executors.newSingleThreadExecutor()
+    private val peerCloseLock = Any()
+    private val closingPeers = ConcurrentHashMap.newKeySet<String>()
+
     interface Listener {
         fun onStatus(message: String)
         fun onSessionCreated(code: String)
@@ -160,7 +166,6 @@ class MultiplayerSessionManager(
 
                 try {
                     initializeWebRtc()
-                    Log.d(TAG, "Firebase authenticated: $localUid")
                     onReady(localUid != null)
                 } catch (e: Exception) {
                     Log.e(TAG, "WebRTC initialization failed", e)
@@ -185,7 +190,6 @@ class MultiplayerSessionManager(
         )
 
         factory = PeerConnectionFactory.builder().createPeerConnectionFactory()
-        Log.d(TAG, "WebRTC initialized")
     }
 
     fun createSession(username: String) {
@@ -203,6 +207,91 @@ class MultiplayerSessionManager(
         createUniqueCode(0, username)
     }
 
+    private fun cancelParticipantDisconnectCleanup(
+        ref: DatabaseReference,
+        uid: String,
+        onComplete: () -> Unit
+    ) {
+        ref.child("members").child(uid).onDisconnect().cancel()
+            .addOnCompleteListener {
+                ref.child("signals").child(uid).onDisconnect().cancel()
+                    .addOnCompleteListener {
+                        onComplete()
+                    }
+            }
+    }
+
+    private fun registerHostDisconnectCleanup(ref: DatabaseReference) {
+        ref.child("active").onDisconnect().setValue(false)
+            .addOnSuccessListener {
+                ref.child("members").onDisconnect().removeValue()
+                    .addOnSuccessListener {
+                        ref.child("signals").onDisconnect().removeValue()
+                            .addOnFailureListener { error ->
+                                Log.e(TAG, "Could not register signals cleanup", error)
+                                listener.onError("Could not register automatic signals cleanup: ${error.message}")
+                            }
+                    }
+                    .addOnFailureListener { error ->
+                        Log.e(TAG, "Could not register members cleanup", error)
+                        listener.onError("Could not register automatic members cleanup: ${error.message}")
+                    }
+            }
+            .addOnFailureListener { error ->
+                Log.e(TAG, "Could not register active cleanup", error)
+                listener.onError("Could not register automatic session cleanup: ${error.message}")
+            }
+    }
+
+    private fun registerParticipantDisconnectCleanup(
+        ref: DatabaseReference,
+        uid: String
+    ) {
+        val memberDisconnect = ref.child("members").child(uid).onDisconnect()
+
+        memberDisconnect.removeValue()
+            .addOnSuccessListener {
+                ref.child("signals").child(uid).onDisconnect().removeValue()
+                    .addOnFailureListener { error ->
+                        Log.e(TAG, "[$uid] Could not register signals cleanup", error)
+                    }
+            }
+            .addOnFailureListener { error ->
+                Log.e(TAG, "[$uid] Could not register members cleanup", error)
+                listener.onError("Could not register automatic participant cleanup")
+            }
+    }
+
+    private fun cancelDisconnectCleanup(
+        ref: DatabaseReference,
+        uid: String?,
+        wasHost: Boolean,
+        onComplete: () -> Unit
+    ) {
+        if (wasHost) {
+            ref.child("active").onDisconnect().cancel()
+                .addOnCompleteListener {
+                    ref.child("members").onDisconnect().cancel()
+                        .addOnCompleteListener {
+                            ref.child("signals").onDisconnect().cancel()
+                                .addOnCompleteListener {
+                                    onComplete()
+                                }
+                        }
+                }
+        } else if (uid != null) {
+            ref.child("signals").child(uid).onDisconnect().cancel()
+                .addOnCompleteListener {
+                    ref.child("members").child(uid).onDisconnect().cancel()
+                        .addOnCompleteListener {
+                            onComplete()
+                        }
+                }
+        } else {
+            onComplete()
+        }
+    }
+
     private fun createUniqueCode(attempt: Int, username: String) {
         if (attempt >= 10) {
             listener.onError("Could not create a unique session code")
@@ -215,7 +304,9 @@ class MultiplayerSessionManager(
 
         ref.runTransaction(object : Transaction.Handler {
             override fun doTransaction(currentData: MutableData): Transaction.Result {
-                if (currentData.value != null) return Transaction.abort()
+                if (currentData.child("active").getValue(Boolean::class.java) == true) {
+                    return Transaction.abort()
+                }
 
                 currentData.value = mapOf(
                     "host" to uid,
@@ -251,8 +342,7 @@ class MultiplayerSessionManager(
                 }
 
                 if (isClosed) {
-                    ref.child("active").setValue(false)
-                    ref.child("members").removeValue()
+                    ref.removeValue()
                     return
                 }
 
@@ -260,9 +350,11 @@ class MultiplayerSessionManager(
                 roomRef = ref
                 isHost = true
 
-                Log.d(TAG, "Session created: $code")
+                registerHostDisconnectCleanup(ref)
+
                 listenForMembers()
                 listenForParticipants()
+
                 listener.onSessionCreated(code)
                 listener.onStatus("Waiting for participants...")
             }
@@ -293,90 +385,178 @@ class MultiplayerSessionManager(
         }
 
         val ref = database.child("rooms").child(code)
+        val memberRef = ref.child("members").child(uid)
+
         listener.onStatus("Checking session...")
 
-        ref.get()
-            .addOnSuccessListener { snapshot ->
+        var verifiedHostUid: String? = null
+
+        fun joinAfterChecks() {
+            if (isClosed) return
+
+            memberRef.setValue(
+                mapOf(
+                    "name" to username,
+                    "host" to false,
+                    "canDraw" to false
+                )
+            )
+                .addOnSuccessListener {
+                    if (isClosed) {
+                        memberRef.removeValue()
+                        return@addOnSuccessListener
+                    }
+
+                    registerParticipantDisconnectCleanup(ref, uid)
+
+                    ref.child("members").get()
+                        .addOnSuccessListener { membersSnapshot ->
+                            if (isClosed) {
+                                memberRef.removeValue()
+                                return@addOnSuccessListener
+                            }
+
+                            if (!membersSnapshot.hasChild(uid)) {
+                                memberRef.removeValue()
+                                listener.onError("Could not verify session membership")
+                                return@addOnSuccessListener
+                            }
+
+                            if (membersSnapshot.childrenCount > MAX_PARTICIPANTS) {
+                                cancelParticipantDisconnectCleanup(ref, uid) {
+                                    memberRef.removeValue()
+                                        .addOnSuccessListener {
+                                            listener.onError("Session is full")
+                                        }
+                                        .addOnFailureListener { error ->
+                                            Log.e(TAG, "Could not remove rejected participant", error)
+                                            listener.onError("Session is full. Could not remove your membership.")
+                                        }
+                                }
+                                return@addOnSuccessListener
+                            }
+
+                            val hostUid = verifiedHostUid
+
+                            if (hostUid.isNullOrBlank() || !membersSnapshot.hasChild(hostUid)) {
+                                cancelParticipantDisconnectCleanup(ref, uid) {
+                                    memberRef.removeValue()
+                                }
+                                listener.onError("Invalid session: host is not a member")
+                                return@addOnSuccessListener
+                            }
+
+                            ref.child("active").get()
+                                .addOnSuccessListener { activeSnapshot ->
+                                    if (isClosed) {
+                                        cancelParticipantDisconnectCleanup(ref, uid) {
+                                            memberRef.removeValue()
+                                        }
+                                        return@addOnSuccessListener
+                                    }
+
+                                    if (activeSnapshot.getValue(Boolean::class.java) != true) {
+                                        cancelParticipantDisconnectCleanup(ref, uid) {
+                                            memberRef.removeValue()
+                                        }
+                                        listener.onError("Session is closed")
+                                        return@addOnSuccessListener
+                                    }
+
+                                    sessionCode = code
+                                    roomRef = ref
+                                    isHost = false
+
+                                    listener.onStatus("Joining session...")
+                                    listenForParticipants()
+                                    listenForSessionState()
+                                    listenForOwnPermissions()
+                                    listenForModeration()
+                                    listenForHostOffer()
+                                }
+                                .addOnFailureListener { error ->
+                                    cancelParticipantDisconnectCleanup(ref, uid) {
+                                        memberRef.removeValue()
+                                    }
+                                    Log.e(TAG, "Session status lookup failed", error)
+                                    listener.onError("Could not verify session status: ${error.message}")
+                                }
+                        }
+                        .addOnFailureListener { error ->
+                            cancelParticipantDisconnectCleanup(ref, uid) {
+                                memberRef.removeValue()
+                            }
+                            Log.e(TAG, "Members lookup failed", error)
+                            listener.onError("Could not check session members: ${error.message}")
+                        }
+                }
+                .addOnFailureListener { error ->
+                    Log.e(TAG, "Session join failed", error)
+                    listener.onError("Could not join session: ${error.message}")
+                }
+        }
+
+        fun checkBan() {
+            ref.child("bans").child(uid).get()
+                .addOnSuccessListener { banSnapshot ->
+                    if (isClosed) return@addOnSuccessListener
+
+                    if (banSnapshot.exists()) {
+                        listener.onError("You are banned from this session")
+                        return@addOnSuccessListener
+                    }
+
+                    ref.child("moderation").child(uid).child("timestamp").get()
+                        .addOnSuccessListener { moderationSnapshot ->
+                            if (isClosed) return@addOnSuccessListener
+
+                            lastModerationTimestamp =
+                                moderationSnapshot.getValue(Long::class.java) ?: 0L
+
+                            joinAfterChecks()
+                        }
+                        .addOnFailureListener { error ->
+                            Log.e(TAG, "Moderation lookup failed", error)
+                            listener.onError("Could not check moderation status: ${error.message}")
+                        }
+                }
+                .addOnFailureListener { error ->
+                    Log.e(TAG, "Ban lookup failed", error)
+                    listener.onError("Could not check session access: ${error.message}")
+                }
+        }
+
+        ref.child("host").get()
+            .addOnSuccessListener { hostSnapshot ->
                 if (isClosed) return@addOnSuccessListener
 
-                if (!snapshot.exists()) {
+                val hostUid = hostSnapshot.getValue(String::class.java)
+
+                if (hostUid.isNullOrBlank()) {
                     listener.onError("Session does not exist")
                     return@addOnSuccessListener
                 }
 
-                val hostUid = snapshot.child("host").getValue(String::class.java)
+                verifiedHostUid = hostUid
 
-                if (hostUid.isNullOrBlank()) {
-                    listener.onError("Invalid session: host not found")
-                    return@addOnSuccessListener
-                }
+                ref.child("active").get()
+                    .addOnSuccessListener { activeSnapshot ->
+                        if (isClosed) return@addOnSuccessListener
 
-                val active = snapshot.child("active").getValue(Boolean::class.java) == true
-
-                if (!active) {
-                    listener.onError("Session is closed")
-                    return@addOnSuccessListener
-                }
-
-                if (!snapshot.child("members").hasChild(hostUid)) {
-                    listener.onError("Invalid session: host is not a member")
-                    return@addOnSuccessListener
-                }
-
-                if (snapshot.child("bans").hasChild(uid)) {
-                    listener.onError("You are banned from this session")
-                    return@addOnSuccessListener
-                }
-
-                lastModerationTimestamp = snapshot.child("moderation")
-                    .child(uid)
-                    .child("timestamp")
-                    .getValue(Long::class.java) ?: 0L
-
-                Log.d(TAG, "Previous moderation timestamp for $uid: $lastModerationTimestamp")
-
-                val members = snapshot.child("members")
-                val alreadyMember = members.hasChild(uid)
-
-                if (members.childrenCount >= MAX_PARTICIPANTS && !alreadyMember) {
-                    listener.onError("Session is full")
-                    return@addOnSuccessListener
-                }
-
-                val memberRef = ref.child("members").child(uid)
-
-                memberRef.setValue(
-                    mapOf(
-                        "name" to username,
-                        "host" to false,
-                        "canDraw" to false
-                    )
-                )
-                    .addOnSuccessListener {
-                        if (isClosed) {
-                            memberRef.removeValue()
+                        if (activeSnapshot.getValue(Boolean::class.java) != true) {
+                            listener.onError("Session is closed")
                             return@addOnSuccessListener
                         }
 
-                        sessionCode = code
-                        roomRef = ref
-                        isHost = false
-
-                        Log.d(TAG, "Joined session $code as $uid")
-                        listener.onStatus("Joining session...")
-                        listenForParticipants()
-                        listenForSessionState()
-                        listenForOwnPermissions()
-                        listenForModeration()
-                        listenForHostOffer()
+                        checkBan()
                     }
                     .addOnFailureListener { error ->
-                        Log.e(TAG, "Session join failed", error)
-                        listener.onError("Could not join session: ${error.message}")
+                        Log.e(TAG, "Session status lookup failed", error)
+                        listener.onError("Could not check session status: ${error.message}")
                     }
             }
             .addOnFailureListener { error ->
-                Log.e(TAG, "Session lookup failed", error)
+                Log.e(TAG, "Session host lookup failed", error)
                 listener.onError("Could not check session: ${error.message}")
             }
     }
@@ -457,10 +637,7 @@ class MultiplayerSessionManager(
                 val action = snapshot.child("action").getValue(String::class.java) ?: return
                 val timestamp = snapshot.child("timestamp").getValue(Long::class.java) ?: return
 
-                if (timestamp <= lastModerationTimestamp) {
-                    Log.d(TAG, "Ignoring old moderation event: $action, timestamp: $timestamp")
-                    return
-                }
+                if (timestamp <= lastModerationTimestamp) return
 
                 lastModerationTimestamp = timestamp
 
@@ -470,7 +647,6 @@ class MultiplayerSessionManager(
                     else -> return
                 }
 
-                Log.d(TAG, "New moderation event: $action, timestamp: $timestamp")
                 isClosed = true
                 cleanupLocalSession()
                 listener.onRemovedFromSession(reason)
@@ -567,7 +743,6 @@ class MultiplayerSessionManager(
                     .addOnSuccessListener {
                         participantDrawingPermissions.remove(uid)
                         closePeer(uid)
-                        Log.d(TAG, "Participant removed: $uid, action: $action")
                         onComplete?.invoke(true, null)
                     }
                     .addOnFailureListener { error ->
@@ -593,7 +768,6 @@ class MultiplayerSessionManager(
                 val active = snapshot.getValue(Boolean::class.java) ?: false
                 if (active) return
 
-                Log.d(TAG, "Host closed the session")
                 isClosed = true
                 cleanupLocalSession()
                 listener.onStatus("Host closed the session")
@@ -618,7 +792,6 @@ class MultiplayerSessionManager(
                 if (uid == localUid || isClosed) return
 
                 val name = snapshot.child("name").getValue(String::class.java) ?: "Player"
-                Log.d(TAG, "Participant joined: $uid ($name)")
                 listener.onParticipantJoined(name)
                 createOfferForParticipant(uid)
             }
@@ -627,9 +800,10 @@ class MultiplayerSessionManager(
 
             override fun onChildRemoved(snapshot: DataSnapshot) {
                 val uid = snapshot.key ?: return
-                Log.d(TAG, "Participant left: $uid")
-                closePeer(uid)
+                if (uid == localUid) return
+
                 participantDrawingPermissions.remove(uid)
+                closePeer(uid)
                 listener.onParticipantLeft(uid)
             }
 
@@ -645,10 +819,30 @@ class MultiplayerSessionManager(
         ref.child("members").addChildEventListener(childListener)
     }
 
+    private fun closeLateDataChannel(uid: String, channel: DataChannel) {
+        try {
+            peerCloseExecutor.execute {
+                try {
+                    synchronized(channel) {
+                        channel.unregisterObserver()
+                        channel.close()
+                        channel.dispose()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "[$uid] Error closing late DataChannel", e)
+                }
+            }
+        } catch (e: RejectedExecutionException) {
+            Log.e(TAG, "[$uid] Cannot schedule late DataChannel cleanup", e)
+        }
+    }
+
     private fun createPeer(
         uid: String,
         onRemoteDataChannel: (DataChannel) -> Unit
     ): PeerConnection? {
+        if (isClosed || closingPeers.contains(uid)) return null
+
         val rtcFactory = factory ?: return null
 
         val iceServers = STUN_SERVERS.mapNotNull { server ->
@@ -671,101 +865,69 @@ class MultiplayerSessionManager(
             iceTransportsType = PeerConnection.IceTransportsType.ALL
         }
 
-        Log.d(TAG, "[$uid] Creating P2P connection with ${iceServers.size} STUN servers. TURN is disabled.")
-        Log.d(TAG, "[$uid] Negotiation ID: ${negotiationIds[uid] ?: "not assigned"}")
-
         return try {
             val peerReference = AtomicReference<PeerConnection?>(null)
 
             val peer = rtcFactory.createPeerConnection(
                 configuration,
                 object : PeerConnection.Observer {
-                    override fun onSignalingChange(state: PeerConnection.SignalingState) {
-                        Log.d(TAG, "[$uid] Signaling state: $state")
-                    }
+                    override fun onSignalingChange(state: PeerConnection.SignalingState) {}
 
                     override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
-                        val currentPeer = peerReference.get()
-
-                        Log.d(TAG, "[$uid] ICE connection state: $state")
-                        Log.d(TAG, "[$uid] Negotiation ID: ${negotiationIds[uid]}")
-                        Log.d(TAG, "[$uid] Local description set: ${currentPeer?.localDescription != null}")
-                        Log.d(TAG, "[$uid] Remote description set: ${currentPeer?.remoteDescription != null}")
+                        if (isClosed || closingPeers.contains(uid)) return
 
                         when (state) {
                             PeerConnection.IceConnectionState.CONNECTED,
                             PeerConnection.IceConnectionState.COMPLETED -> {
-                                Log.i(TAG, "[$uid] Direct P2P connection established")
                                 listener.onStatus("Connected to multiplayer session")
                             }
 
                             PeerConnection.IceConnectionState.DISCONNECTED -> {
-                                Log.w(TAG, "[$uid] P2P connection temporarily disconnected")
                                 listener.onStatus("Connection interrupted")
                             }
 
                             PeerConnection.IceConnectionState.FAILED -> {
-                                Log.e(TAG, "[$uid] P2P connection FAILED")
-                                Log.e(TAG, "[$uid] ICE failed. STUN-only connection could not be established.")
-                                Log.e(TAG, "[$uid] Check candidate logs above for host/srflx candidates.")
                                 listener.onError("P2P connection failed. Direct connection could not be established on this network.")
                             }
 
-                            PeerConnection.IceConnectionState.CLOSED -> {
-                                Log.d(TAG, "[$uid] ICE connection closed")
-                            }
-
-                            else -> {
-                                Log.d(TAG, "[$uid] ICE is still negotiating: $state")
-                            }
+                            else -> {}
                         }
                     }
 
-                    override fun onIceConnectionReceivingChange(receiving: Boolean) {
-                        Log.d(TAG, "[$uid] ICE receiving: $receiving")
-                    }
+                    override fun onIceConnectionReceivingChange(receiving: Boolean) {}
 
-                    override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
-                        Log.d(TAG, "[$uid] ICE gathering state: $state")
-
-                        if (state == PeerConnection.IceGatheringState.COMPLETE) {
-                            Log.d(TAG, "[$uid] ICE candidate gathering completed")
-                        }
-                    }
+                    override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {}
 
                     override fun onIceCandidate(candidate: IceCandidate) {
-                        val candidateType = when {
-                            candidate.sdp.contains(" typ relay") -> "relay"
-                            candidate.sdp.contains(" typ srflx") -> "srflx"
-                            candidate.sdp.contains(" typ host") -> "host"
-                            else -> "unknown"
-                        }
-
-                        Log.d(TAG, "[$uid] Local ICE candidate type: $candidateType")
-                        Log.d(TAG, "[$uid] Local ICE candidate mid: ${candidate.sdpMid}")
-                        Log.d(TAG, "[$uid] Local ICE candidate mLineIndex: ${candidate.sdpMLineIndex}")
-                        Log.v(TAG, "[$uid] Local ICE candidate: ${candidate.sdp}")
-
+                        if (isClosed || closingPeers.contains(uid)) return
                         sendIceCandidate(uid, candidate)
                     }
 
-                    override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {
-                        Log.d(TAG, "[$uid] ICE candidates removed: ${candidates.size}")
-                    }
+                    override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
 
                     override fun onAddStream(stream: org.webrtc.MediaStream) {}
                     override fun onRemoveStream(stream: org.webrtc.MediaStream) {}
 
                     override fun onDataChannel(channel: DataChannel) {
-                        Log.d(TAG, "[$uid] Remote DataChannel received")
-                        channels[uid] = channel
+                        val accepted = synchronized(peerCloseLock) {
+                            if (isClosed || closingPeers.contains(uid)) {
+                                false
+                            } else {
+                                channels[uid] = channel
+                                true
+                            }
+                        }
+
+                        if (!accepted) {
+                            closeLateDataChannel(uid, channel)
+                            return
+                        }
+
                         registerDataChannel(uid, channel)
                         onRemoteDataChannel(channel)
                     }
 
-                    override fun onRenegotiationNeeded() {
-                        Log.d(TAG, "[$uid] Renegotiation needed")
-                    }
+                    override fun onRenegotiationNeeded() {}
 
                     override fun onAddTrack(
                         receiver: org.webrtc.RtpReceiver,
@@ -779,10 +941,32 @@ class MultiplayerSessionManager(
                 return null
             }
 
-            peerReference.set(peer)
-            peers[uid] = peer
+            val accepted = synchronized(peerCloseLock) {
+                if (isClosed || closingPeers.contains(uid)) {
+                    false
+                } else {
+                    peers[uid] = peer
+                    true
+                }
+            }
 
-            Log.d(TAG, "[$uid] PeerConnection created")
+            if (!accepted) {
+                try {
+                    peerCloseExecutor.execute {
+                        try {
+                            peer.close()
+                            peer.dispose()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "[$uid] Error closing rejected PeerConnection", e)
+                        }
+                    }
+                } catch (e: RejectedExecutionException) {
+                    Log.e(TAG, "[$uid] Could not schedule rejected PeerConnection cleanup", e)
+                }
+                return null
+            }
+
+            peerReference.set(peer)
             peer
         } catch (e: Exception) {
             Log.e(TAG, "[$uid] PeerConnection creation failed", e)
@@ -791,26 +975,27 @@ class MultiplayerSessionManager(
     }
 
     private fun createOfferForParticipant(uid: String) {
-        if (isClosed || !isHost || peers.containsKey(uid)) return
+        if (isClosed || !isHost || peers.containsKey(uid) || closingPeers.contains(uid)) return
 
         val memberRef = roomRef?.child("members")?.child(uid) ?: return
 
         memberRef.get()
             .addOnSuccessListener { member ->
-                if (isClosed || !member.exists()) return@addOnSuccessListener
+                if (isClosed || !isHost || !member.exists()) return@addOnSuccessListener
                 if (member.child("host").getValue(Boolean::class.java) == true) return@addOnSuccessListener
                 createOfferForConfirmedParticipant(uid)
             }
             .addOnFailureListener { error ->
+                if (isClosed) return@addOnFailureListener
                 Log.e(TAG, "[$uid] Could not verify participant", error)
             }
     }
 
     private fun createOfferForConfirmedParticipant(uid: String) {
-        if (isClosed || !isHost || peers.containsKey(uid)) return
+        if (isClosed || !isHost || peers.containsKey(uid) || closingPeers.contains(uid)) return
 
         val signalRef = roomRef?.child("signals")?.child(uid) ?: run {
-            listener.onError("Could not access signaling database")
+            if (!isClosed) listener.onError("Could not access signaling database")
             return
         }
 
@@ -818,13 +1003,14 @@ class MultiplayerSessionManager(
 
         signalRef.removeValue()
             .addOnSuccessListener {
-                if (isClosed || !isHost || peers.containsKey(uid)) return@addOnSuccessListener
+                if (isClosed || !isHost || peers.containsKey(uid) || closingPeers.contains(uid)) return@addOnSuccessListener
 
                 val negotiationId = UUID.randomUUID().toString()
                 negotiationIds[uid] = negotiationId
                 startOfferCreation(uid, signalRef, negotiationId)
             }
             .addOnFailureListener { error ->
+                if (isClosed) return@addOnFailureListener
                 Log.e(TAG, "[$uid] Could not clear old signaling data", error)
                 listener.onError("Could not prepare WebRTC signaling: ${error.message}")
             }
@@ -835,10 +1021,12 @@ class MultiplayerSessionManager(
         signalRef: DatabaseReference,
         negotiationId: String
     ) {
-        if (isClosed || negotiationIds[uid] != negotiationId) return
+        if (isClosed || closingPeers.contains(uid) || negotiationIds[uid] != negotiationId) return
 
         val peer = createPeer(uid) {} ?: run {
-            listener.onError("Could not create WebRTC connection")
+            if (!isClosed && !closingPeers.contains(uid)) {
+                listener.onError("Could not create WebRTC connection")
+            }
             return
         }
 
@@ -847,22 +1035,34 @@ class MultiplayerSessionManager(
         })
 
         if (channel == null) {
-            listener.onError("Could not create DataChannel")
+            if (!isClosed) listener.onError("Could not create DataChannel")
             closePeer(uid)
             return
         }
 
-        channels[uid] = channel
+        val accepted = synchronized(peerCloseLock) {
+            if (isClosed || closingPeers.contains(uid)) {
+                false
+            } else {
+                channels[uid] = channel
+                true
+            }
+        }
+
+        if (!accepted) {
+            closeLateDataChannel(uid, channel)
+            return
+        }
+
         registerDataChannel(uid, channel)
-        Log.d(TAG, "[$uid] Creating offer. Negotiation: $negotiationId")
 
         peer.createOffer(object : SdpObserverAdapter() {
             override fun onCreateSuccess(description: SessionDescription) {
-                if (isClosed || negotiationIds[uid] != negotiationId) return
+                if (isClosed || closingPeers.contains(uid) || negotiationIds[uid] != negotiationId) return
 
                 peer.setLocalDescription(object : SdpObserverAdapter() {
                     override fun onSetSuccess() {
-                        if (isClosed || negotiationIds[uid] != negotiationId) return
+                        if (isClosed || closingPeers.contains(uid) || negotiationIds[uid] != negotiationId) return
 
                         listenForAnswer(uid, peer, negotiationId)
                         listenForRemoteCandidates(uid, "participantCandidates", peer, negotiationId)
@@ -875,15 +1075,19 @@ class MultiplayerSessionManager(
                             )
                         )
                             .addOnSuccessListener {
-                                if (!isClosed) listener.onStatus("Offer sent. Waiting for answer...")
+                                if (!isClosed && !closingPeers.contains(uid)) {
+                                    listener.onStatus("Offer sent. Waiting for answer...")
+                                }
                             }
                             .addOnFailureListener { error ->
+                                if (isClosed || closingPeers.contains(uid)) return@addOnFailureListener
                                 Log.e(TAG, "[$uid] Offer send failed", error)
                                 listener.onError("Could not send offer: ${error.message}")
                             }
                     }
 
                     override fun onSetFailure(error: String) {
+                        if (isClosed || closingPeers.contains(uid)) return
                         Log.e(TAG, "[$uid] Setting local offer failed: $error")
                         listener.onError("Could not set local offer: $error")
                     }
@@ -891,6 +1095,7 @@ class MultiplayerSessionManager(
             }
 
             override fun onCreateFailure(error: String) {
+                if (isClosed || closingPeers.contains(uid)) return
                 Log.e(TAG, "[$uid] Offer creation failed: $error")
                 listener.onError("Offer creation failed: $error")
             }
@@ -906,26 +1111,22 @@ class MultiplayerSessionManager(
 
         val valueListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                if (isClosed || negotiationIds[uid] != negotiationId) return
+                if (isClosed || closingPeers.contains(uid) || negotiationIds[uid] != negotiationId) return
 
                 val receivedNegotiationId = snapshot.child("negotiationId")
                     .getValue(String::class.java) ?: return
 
-                if (receivedNegotiationId != negotiationId) {
-                    Log.w(TAG, "[$uid] Ignoring answer from old negotiation")
-                    return
-                }
+                if (receivedNegotiationId != negotiationId) return
 
                 val sdp = snapshot.child("sdp").getValue(String::class.java) ?: return
                 val type = snapshot.child("type").getValue(String::class.java) ?: "answer"
 
                 if (peer.remoteDescription != null || !remoteDescriptionPending.add(uid)) return
 
-                Log.d(TAG, "[$uid] Received remote answer. Applying SDP...")
                 peer.setRemoteDescription(object : SdpObserverAdapter() {
                     override fun onSetSuccess() {
                         remoteDescriptionPending.remove(uid)
-                        Log.d(TAG, "[$uid] Remote answer applied")
+                        if (isClosed || closingPeers.contains(uid)) return
                         flushPendingIceCandidates(uid, peer)
                     }
 
@@ -955,27 +1156,24 @@ class MultiplayerSessionManager(
 
         val offerListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                if (isClosed || isHost) return
+                if (isClosed || isHost || closingPeers.contains("host")) return
 
                 val sdp = snapshot.child("sdp").getValue(String::class.java) ?: return
                 val type = snapshot.child("type").getValue(String::class.java) ?: "offer"
                 val negotiationId = snapshot.child("negotiationId").getValue(String::class.java)
 
-                if (negotiationId.isNullOrBlank()) {
-                    Log.w(TAG, "[host] Received offer without negotiation ID")
-                    return
-                }
-
+                if (negotiationId.isNullOrBlank()) return
                 if (peers.containsKey("host") || !remoteDescriptionPending.add("host")) return
 
                 negotiationIds["host"] = negotiationId
 
                 listener.onStatus("Offer received. Creating connection...")
-                Log.d(TAG, "[host] Received offer. Negotiation: $negotiationId")
 
                 val peer = createPeer("host") {} ?: run {
                     remoteDescriptionPending.remove("host")
-                    listener.onError("Could not create WebRTC connection")
+                    if (!isClosed && !closingPeers.contains("host")) {
+                        listener.onError("Could not create WebRTC connection")
+                    }
                     return
                 }
 
@@ -984,16 +1182,17 @@ class MultiplayerSessionManager(
                 peer.setRemoteDescription(object : SdpObserverAdapter() {
                     override fun onSetSuccess() {
                         remoteDescriptionPending.remove("host")
-                        Log.d(TAG, "[host] Remote offer applied")
+                        if (isClosed || closingPeers.contains("host")) return
+
                         flushPendingIceCandidates("host", peer)
 
                         peer.createAnswer(object : SdpObserverAdapter() {
                             override fun onCreateSuccess(description: SessionDescription) {
-                                if (isClosed || negotiationIds["host"] != negotiationId) return
+                                if (isClosed || closingPeers.contains("host") || negotiationIds["host"] != negotiationId) return
 
                                 peer.setLocalDescription(object : SdpObserverAdapter() {
                                     override fun onSetSuccess() {
-                                        if (isClosed || negotiationIds["host"] != negotiationId) return
+                                        if (isClosed || closingPeers.contains("host") || negotiationIds["host"] != negotiationId) return
 
                                         ref.child("answer").setValue(
                                             mapOf(
@@ -1003,15 +1202,20 @@ class MultiplayerSessionManager(
                                             )
                                         )
                                             .addOnSuccessListener {
-                                                if (!isClosed) listener.onStatus("Answer sent. Connecting...")
+                                                if (!isClosed && !closingPeers.contains("host")) {
+                                                    listener.onStatus("Answer sent. Connecting...")
+                                                }
                                             }
                                             .addOnFailureListener { error ->
                                                 Log.e(TAG, "[host] Answer send failed", error)
-                                                listener.onError("Could not send answer: ${error.message}")
+                                                if (!isClosed && !closingPeers.contains("host")) {
+                                                    listener.onError("Could not send answer: ${error.message}")
+                                                }
                                             }
                                     }
 
                                     override fun onSetFailure(error: String) {
+                                        if (isClosed || closingPeers.contains("host")) return
                                         Log.e(TAG, "[host] Setting local answer failed: $error")
                                         listener.onError("Could not set local answer: $error")
                                     }
@@ -1019,6 +1223,7 @@ class MultiplayerSessionManager(
                             }
 
                             override fun onCreateFailure(error: String) {
+                                if (isClosed || closingPeers.contains("host")) return
                                 Log.e(TAG, "[host] Answer creation failed: $error")
                                 listener.onError("Answer creation failed: $error")
                             }
@@ -1027,6 +1232,7 @@ class MultiplayerSessionManager(
 
                     override fun onSetFailure(error: String) {
                         remoteDescriptionPending.remove("host")
+                        if (isClosed || closingPeers.contains("host")) return
                         Log.e(TAG, "[host] Setting remote offer failed: $error")
                         listener.onError("Could not set offer: $error")
                     }
@@ -1034,6 +1240,7 @@ class MultiplayerSessionManager(
             }
 
             override fun onCancelled(error: DatabaseError) {
+                if (isClosed) return
                 Log.e(TAG, "Offer listener cancelled", error.toException())
                 listener.onError("Offer listener error: ${error.message}")
             }
@@ -1045,14 +1252,11 @@ class MultiplayerSessionManager(
     }
 
     private fun sendIceCandidate(uid: String, candidate: IceCandidate) {
-        if (isClosed) return
+        if (isClosed || closingPeers.contains(uid)) return
 
         val code = sessionCode ?: return
         val local = localUid ?: return
-        val negotiationId = negotiationIds[uid] ?: run {
-            Log.w(TAG, "[$uid] Cannot send ICE candidate: negotiation ID missing")
-            return
-        }
+        val negotiationId = negotiationIds[uid] ?: return
 
         val path = if (isHost) {
             database.child("rooms").child(code).child("signals").child(uid).child("hostCandidates")
@@ -1067,9 +1271,7 @@ class MultiplayerSessionManager(
                 "sdp" to candidate.sdp,
                 "negotiationId" to negotiationId
             )
-        ).addOnSuccessListener {
-            Log.d(TAG, "[$uid] ICE candidate sent to Firebase")
-        }.addOnFailureListener { error ->
+        ).addOnFailureListener { error ->
             Log.e(TAG, "[$uid] ICE candidate send failed", error)
             if (!isClosed) listener.onError("Could not send ICE candidate: ${error.message}")
         }
@@ -1080,10 +1282,13 @@ class MultiplayerSessionManager(
         peer: PeerConnection,
         candidate: IceCandidate
     ) {
+        if (isClosed || closingPeers.contains(uid)) return
+
         synchronized(pendingIceCandidates) {
+            if (isClosed || closingPeers.contains(uid)) return
+
             if (peer.remoteDescription != null) {
-                val added = peer.addIceCandidate(candidate)
-                Log.d(TAG, "[$uid] Remote ICE candidate added immediately: $added")
+                peer.addIceCandidate(candidate)
             } else {
                 val candidates = pendingIceCandidates.getOrPut(uid) {
                     Collections.synchronizedList(mutableListOf())
@@ -1092,9 +1297,6 @@ class MultiplayerSessionManager(
                 synchronized(candidates) {
                     if (candidates.size < MAX_PENDING_ICE_CANDIDATES) {
                         candidates.add(candidate)
-                        Log.d(TAG, "[$uid] ICE candidate queued. Pending: ${candidates.size}")
-                    } else {
-                        Log.w(TAG, "[$uid] Pending ICE candidate limit reached")
                     }
                 }
             }
@@ -1102,15 +1304,17 @@ class MultiplayerSessionManager(
     }
 
     private fun flushPendingIceCandidates(uid: String, peer: PeerConnection) {
+        if (isClosed || closingPeers.contains(uid)) return
+
         synchronized(pendingIceCandidates) {
+            if (isClosed || closingPeers.contains(uid)) return
+
             val candidates = pendingIceCandidates.remove(uid) ?: return
 
             synchronized(candidates) {
-                Log.d(TAG, "[$uid] Applying ${candidates.size} queued ICE candidates")
-
                 candidates.forEach {
-                    val added = peer.addIceCandidate(it)
-                    Log.d(TAG, "[$uid] Queued ICE candidate added: $added")
+                    if (isClosed || closingPeers.contains(uid)) return@forEach
+                    peer.addIceCandidate(it)
                 }
 
                 candidates.clear()
@@ -1135,30 +1339,16 @@ class MultiplayerSessionManager(
 
         val childListener = object : ChildEventListener {
             override fun onChildAdded(snapshot: DataSnapshot, previousChildName: String?) {
-                if (isClosed || negotiationIds[uid] != negotiationId) return
+                if (isClosed || closingPeers.contains(uid) || negotiationIds[uid] != negotiationId) return
 
                 val candidateNegotiationId = snapshot.child("negotiationId")
                     .getValue(String::class.java) ?: return
 
-                if (candidateNegotiationId != negotiationId) {
-                    Log.d(TAG, "[$uid] Ignoring ICE candidate from old negotiation")
-                    return
-                }
+                if (candidateNegotiationId != negotiationId) return
 
                 val sdp = snapshot.child("sdp").getValue(String::class.java) ?: return
                 val mid = snapshot.child("sdpMid").getValue(String::class.java)
                 val line = snapshot.child("sdpMLineIndex").getValue(Int::class.java) ?: 0
-
-                val candidateType = when {
-                    sdp.contains(" typ relay") -> "relay"
-                    sdp.contains(" typ srflx") -> "srflx"
-                    sdp.contains(" typ host") -> "host"
-                    else -> "unknown"
-                }
-
-                Log.d(TAG, "[$uid] Remote ICE candidate received. Type: $candidateType")
-                Log.d(TAG, "[$uid] Remote ICE candidate mid: $mid, mLineIndex: $line")
-                Log.v(TAG, "[$uid] Remote ICE candidate: $sdp")
 
                 addIceCandidateSafely(uid, peer, IceCandidate(mid, line, sdp))
             }
@@ -1179,17 +1369,20 @@ class MultiplayerSessionManager(
     }
 
     private fun registerDataChannel(uid: String, channel: DataChannel) {
+        if (isClosed || closingPeers.contains(uid)) return
+
         outgoingQueues.putIfAbsent(uid, ConcurrentLinkedQueue())
         outgoingQueueSizes.putIfAbsent(uid, AtomicLong(0L))
 
         channel.registerObserver(object : DataChannel.Observer {
             override fun onBufferedAmountChange(previousAmount: Long) {
-                drainOutgoingQueue(uid)
+                if (!isClosed && !closingPeers.contains(uid)) drainOutgoingQueue(uid)
             }
 
             override fun onStateChange() {
+                if (isClosed || closingPeers.contains(uid)) return
+
                 val state = channel.state()
-                Log.d(TAG, "[$uid] DataChannel state: $state")
 
                 if (state == DataChannel.State.OPEN) {
                     drainOutgoingQueue(uid)
@@ -1200,20 +1393,13 @@ class MultiplayerSessionManager(
                         sendDrawingMessage(JSONObject().put("type", "drawingSnapshotRequest"))
                     }
                 }
-
-                if (state == DataChannel.State.CLOSED) {
-                    Log.d(TAG, "[$uid] DataChannel closed")
-                }
             }
 
             override fun onMessage(buffer: DataChannel.Buffer) {
-                if (buffer.binary) return
+                if (isClosed || closingPeers.contains(uid) || buffer.binary) return
 
                 val size = buffer.data.remaining()
-                if (size <= 0 || size > MAX_MESSAGE_BYTES) {
-                    Log.w(TAG, "[$uid] Incoming message rejected. Size: $size")
-                    return
-                }
+                if (size <= 0 || size > MAX_MESSAGE_BYTES) return
 
                 val bytes = ByteArray(size)
                 buffer.data.get(bytes)
@@ -1221,25 +1407,18 @@ class MultiplayerSessionManager(
             }
         })
 
-        if (channel.state() == DataChannel.State.OPEN) {
+        if (channel.state() == DataChannel.State.OPEN && !isClosed && !closingPeers.contains(uid)) {
             listener.onDrawingChannelReady(uid)
         }
     }
 
     private fun enqueueMessage(uid: String, message: String) {
-        if (isClosed) return
+        if (isClosed || closingPeers.contains(uid)) return
 
-        val channel = channels[uid] ?: run {
-            Log.w(TAG, "[$uid] Cannot queue message. DataChannel missing.")
-            return
-        }
-
+        val channel = channels[uid] ?: return
         val bytes = message.toByteArray(Charsets.UTF_8)
 
-        if (bytes.size > MAX_MESSAGE_BYTES) {
-            Log.w(TAG, "[$uid] Outgoing message is too large")
-            return
-        }
+        if (bytes.size > MAX_MESSAGE_BYTES) return
 
         val queue = outgoingQueues.getOrPut(uid) { ConcurrentLinkedQueue() }
         val sizeCounter = outgoingQueueSizes.getOrPut(uid) { AtomicLong(0L) }
@@ -1248,7 +1427,6 @@ class MultiplayerSessionManager(
 
         if (newSize > MAX_QUEUED_BYTES) {
             sizeCounter.addAndGet(-bytes.size.toLong())
-            Log.w(TAG, "[$uid] Outgoing queue limit reached")
             listener.onError("Data transfer queue is full")
             return
         }
@@ -1258,16 +1436,19 @@ class MultiplayerSessionManager(
     }
 
     private fun drainOutgoingQueue(uid: String) {
-        if (isClosed) return
+        if (isClosed || closingPeers.contains(uid)) return
 
         val channel = channels[uid] ?: return
         val queue = outgoingQueues[uid] ?: return
         val sizeCounter = outgoingQueueSizes[uid] ?: return
 
         synchronized(channel) {
+            if (isClosed || closingPeers.contains(uid)) return
             if (channel.state() != DataChannel.State.OPEN) return
 
-            while (channel.bufferedAmount() < MAX_BUFFERED_AMOUNT) {
+            while (!isClosed && !closingPeers.contains(uid) &&
+                channel.bufferedAmount() < MAX_BUFFERED_AMOUNT
+            ) {
                 val bytes = queue.peek() ?: break
 
                 val sent = try {
@@ -1277,10 +1458,7 @@ class MultiplayerSessionManager(
                     false
                 }
 
-                if (!sent) {
-                    Log.w(TAG, "[$uid] DataChannel buffer full. Waiting.")
-                    break
-                }
+                if (!sent) break
 
                 queue.poll()
                 sizeCounter.addAndGet(-bytes.size.toLong())
@@ -1289,19 +1467,14 @@ class MultiplayerSessionManager(
     }
 
     private fun handleIncomingMessage(senderUid: String, message: String) {
+        if (isClosed || closingPeers.contains(senderUid)) return
+
         try {
             val json = JSONObject(message)
             val type = json.optString("type")
 
-            if (!isHost && senderUid != "host") {
-                Log.w(TAG, "Rejected message from non-host peer: $senderUid")
-                return
-            }
-
-            if (isHost && senderUid == "host") {
-                Log.w(TAG, "Rejected invalid host peer message")
-                return
-            }
+            if (!isHost && senderUid != "host") return
+            if (isHost && senderUid == "host") return
 
             when (type) {
                 "objects" -> {
@@ -1325,10 +1498,7 @@ class MultiplayerSessionManager(
                         total > MAX_MAP_CHUNKS ||
                         infoString.toByteArray(Charsets.UTF_8).size > MAX_METADATA_BYTES ||
                         objectsString.toByteArray(Charsets.UTF_8).size > MAX_METADATA_BYTES
-                    ) {
-                        Log.w(TAG, "Rejected invalid map transfer metadata")
-                        return
-                    }
+                    ) return
 
                     if (incomingMaps.size >= 2 && !incomingMaps.containsKey(id)) {
                         incomingMaps.clear()
@@ -1340,8 +1510,6 @@ class MultiplayerSessionManager(
                         ConcurrentHashMap<Int, ByteArray>(),
                         total
                     )
-
-                    Log.d(TAG, "Incoming map started: $id, chunks: $total")
                 }
 
                 "mapChunk" -> {
@@ -1351,15 +1519,11 @@ class MultiplayerSessionManager(
                     val map = incomingMaps[id] ?: return
                     val index = json.getInt("index")
 
-                    if (index < 0 || index >= map.totalChunks) {
-                        Log.w(TAG, "Invalid map chunk index: $index")
-                        return
-                    }
+                    if (index < 0 || index >= map.totalChunks) return
 
                     val encoded = json.getString("data")
                     if (encoded.length > CHUNK_SIZE) {
                         incomingMaps.remove(id)
-                        Log.w(TAG, "Map chunk is too large")
                         return
                     }
 
@@ -1380,10 +1544,7 @@ class MultiplayerSessionManager(
                     val output = ByteArrayOutputStream()
 
                     for (index in 0 until map.totalChunks) {
-                        val chunk = map.chunks[index]
-
-                        if (chunk == null) {
-                            Log.w(TAG, "Map transfer incomplete. Missing chunk $index")
+                        val chunk = map.chunks[index] ?: run {
                             listener.onError("Map transfer incomplete. Missing data.")
                             return
                         }
@@ -1396,7 +1557,6 @@ class MultiplayerSessionManager(
                         output.write(chunk)
                     }
 
-                    Log.d(TAG, "Map received successfully: $id, bytes: ${output.size()}")
                     listener.onMapReceived(map.info, map.objects, output.toByteArray())
                 }
 
@@ -1404,27 +1564,30 @@ class MultiplayerSessionManager(
                     if (isHost) listener.onDrawingMessage(senderUid, json)
                 }
 
-                "drawingSnapshot", "drawingStroke", "drawingUndo", "drawingRedo", "drawingLegend" -> {
-                    if (isHost && participantDrawingPermissions[senderUid] != true) {
-                        Log.w(TAG, "Drawing rejected from unauthorized participant: $senderUid")
-                        return
-                    }
-
+                "drawingSnapshot" -> {
+                    if (isHost) return
                     listener.onDrawingMessage(senderUid, json)
-                    if (isHost) broadcastExcept(message, senderUid)
+                }
+
+                "drawingStroke", "drawingUndo", "drawingRedo", "drawingLegend" -> {
+                    if (isHost) {
+                        if (participantDrawingPermissions[senderUid] != true) return
+
+                        val forwarded = JSONObject(json.toString())
+                        forwarded.put("authorUid", senderUid)
+
+                        listener.onDrawingMessage(senderUid, forwarded)
+                        broadcastExcept(forwarded.toString(), senderUid)
+                    } else {
+                        listener.onDrawingMessage(senderUid, json)
+                    }
                 }
 
                 "drawingClearUser" -> {
-                    if (isHost) {
-                        Log.w(TAG, "Rejected drawing clear message from participant: $senderUid")
-                        return
-                    }
+                    if (isHost) return
 
                     val targetUid = json.optString("uid")
-                    if (targetUid.isBlank()) {
-                        Log.w(TAG, "Rejected drawing clear message with invalid UID")
-                        return
-                    }
+                    if (targetUid.isBlank()) return
 
                     listener.onDrawingMessage(senderUid, json)
                 }
@@ -1455,7 +1618,6 @@ class MultiplayerSessionManager(
         listener.onDrawingMessage("host", message)
         broadcast(message.toString())
 
-        Log.d(TAG, "Drawings cleared for participant: $uid")
         onComplete?.invoke(true, null)
     }
 
@@ -1521,10 +1683,7 @@ class MultiplayerSessionManager(
         val destination = targetUid
 
         if (destination != null) {
-            if (!channels.containsKey(destination)) {
-                Log.w(TAG, "[$destination] Cannot send map. DataChannel missing.")
-                return
-            }
+            if (!channels.containsKey(destination)) return
             enqueueMessage(destination, start.toString())
         } else {
             broadcast(start.toString())
@@ -1549,11 +1708,6 @@ class MultiplayerSessionManager(
 
         if (destination != null) enqueueMessage(destination, end)
         else broadcast(end)
-
-        Log.d(
-            TAG,
-            "Map queued. ID: $id, target: ${destination ?: "all"}, chunks: ${chunks.size}, bytes: ${imageBytes.size}"
-        )
     }
 
     fun sendObjects(objects: JSONObject, targetUid: String? = null) {
@@ -1585,7 +1739,11 @@ class MultiplayerSessionManager(
         peerListeners.remove(uid)?.let { registrations ->
             synchronized(registrations) {
                 registrations.forEach {
-                    it.ref.removeEventListener(it.listener)
+                    try {
+                        it.ref.removeEventListener(it.listener)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "[$uid] Error removing Firebase value listener", e)
+                    }
                 }
                 registrations.clear()
             }
@@ -1594,41 +1752,72 @@ class MultiplayerSessionManager(
         peerChildListeners.remove(uid)?.let { registrations ->
             synchronized(registrations) {
                 registrations.forEach {
-                    it.ref.removeEventListener(it.listener)
+                    try {
+                        it.ref.removeEventListener(it.listener)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "[$uid] Error removing Firebase child listener", e)
+                    }
                 }
                 registrations.clear()
             }
         }
 
         remoteDescriptionPending.remove(uid)
-        pendingIceCandidates.remove(uid)
+
+        synchronized(pendingIceCandidates) {
+            pendingIceCandidates.remove(uid)?.clear()
+        }
+
         negotiationIds.remove(uid)
     }
 
     private fun closePeer(uid: String) {
-        Log.d(TAG, "Closing peer: $uid")
-        removePeerListeners(uid)
+        val channel: DataChannel?
+        val peer: PeerConnection?
 
-        outgoingQueues.remove(uid)?.clear()
-        outgoingQueueSizes.remove(uid)
+        synchronized(peerCloseLock) {
+            if (!closingPeers.add(uid)) return
 
-        channels.remove(uid)?.let { channel ->
-            try {
-                channel.unregisterObserver()
-                channel.close()
-                channel.dispose()
-            } catch (e: Exception) {
-                Log.e(TAG, "[$uid] Error closing DataChannel", e)
-            }
+            channel = channels.remove(uid)
+            peer = peers.remove(uid)
+
+            outgoingQueues.remove(uid)?.clear()
+            outgoingQueueSizes.remove(uid)
         }
 
-        peers.remove(uid)?.let { peer ->
-            try {
-                peer.close()
-                peer.dispose()
-            } catch (e: Exception) {
-                Log.e(TAG, "[$uid] Error closing PeerConnection", e)
+        removePeerListeners(uid)
+        participantDrawingPermissions.remove(uid)
+
+        try {
+            peerCloseExecutor.execute {
+                try {
+                    channel?.let {
+                        try {
+                            synchronized(it) {
+                                it.unregisterObserver()
+                                it.close()
+                                it.dispose()
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "[$uid] Error closing DataChannel", e)
+                        }
+                    }
+
+                    peer?.let {
+                        try {
+                            it.close()
+                            it.dispose()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "[$uid] Error closing PeerConnection", e)
+                        }
+                    }
+                } finally {
+                    closingPeers.remove(uid)
+                }
             }
+        } catch (e: RejectedExecutionException) {
+            Log.e(TAG, "[$uid] Peer cleanup executor is unavailable", e)
+            closingPeers.remove(uid)
         }
     }
 
@@ -1665,37 +1854,28 @@ class MultiplayerSessionManager(
         drawingPermissionListener = null
         moderationListener = null
 
-        (peerListeners.keys + peerChildListeners.keys).toSet().forEach {
-            removePeerListeners(it)
+        val peerUids = (
+                peers.keys +
+                        channels.keys +
+                        peerListeners.keys +
+                        peerChildListeners.keys
+                ).toSet()
+
+        peerUids.forEach { uid ->
+            closePeer(uid)
         }
 
-        peers.keys.toList().forEach {
-            closePeer(it)
-        }
-
-        channels.keys.toList().forEach { uid ->
-            channels.remove(uid)?.let { channel ->
-                try {
-                    channel.unregisterObserver()
-                    channel.close()
-                    channel.dispose()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error disposing channel $uid", e)
-                }
-            }
-        }
-
-        channels.clear()
-        peers.clear()
         outgoingQueues.clear()
         outgoingQueueSizes.clear()
-        pendingIceCandidates.clear()
+
+        synchronized(pendingIceCandidates) {
+            pendingIceCandidates.clear()
+        }
+
         remoteDescriptionPending.clear()
         negotiationIds.clear()
         incomingMaps.clear()
         participantDrawingPermissions.clear()
-        peerListeners.clear()
-        peerChildListeners.clear()
 
         sessionCode = null
         roomRef = null
@@ -1707,87 +1887,94 @@ class MultiplayerSessionManager(
 
     fun leaveSession(onComplete: ((Boolean, String?) -> Unit)? = null) {
         if (isClosed) {
-            onComplete?.invoke(true, null)
-            return
+            if (roomRef == null) {
+                onComplete?.invoke(true, null)
+                return
+            }
         }
 
         isClosed = true
-        Log.d(TAG, "Leaving multiplayer session")
 
         val uid = localUid
         val ref = roomRef
         val wasHost = isHost
 
-        cleanupLocalSession()
-
         if (ref == null) {
+            cleanupLocalSession()
             onComplete?.invoke(true, null)
             return
         }
 
         if (wasHost) {
+            fun removeRoom() {
+                cleanupLocalSession()
+
+                ref.removeValue()
+                    .addOnSuccessListener {
+                        onComplete?.invoke(true, null)
+                    }
+                    .addOnFailureListener { error ->
+                        Log.e(TAG, "Could not remove session", error)
+                        onComplete?.invoke(false, error.message ?: "Could not remove session")
+                    }
+            }
+
             ref.child("active").setValue(false)
                 .addOnSuccessListener {
-                    ref.child("members").removeValue()
-                        .addOnSuccessListener {
-                            ref.child("signals").removeValue()
-                                .addOnSuccessListener {
-                                    Log.d(TAG, "Host closed the session")
-                                    onComplete?.invoke(true, null)
-                                }
-                                .addOnFailureListener { error ->
-                                    Log.e(TAG, "Could not remove session signals", error)
-                                    onComplete?.invoke(
-                                        false,
-                                        error.message ?: "Could not remove session signals"
-                                    )
-                                }
-                        }
-                        .addOnFailureListener { error ->
-                            Log.e(TAG, "Could not remove session members", error)
-                            onComplete?.invoke(
-                                false,
-                                error.message ?: "Could not remove session members"
-                            )
-                        }
+                    removeRoom()
                 }
                 .addOnFailureListener { error ->
-                    Log.e(TAG, "Could not close session", error)
-                    onComplete?.invoke(false, error.message ?: "Could not close session")
+                    Log.e(TAG, "Could not deactivate session", error)
+                    removeRoom()
                 }
-        } else if (uid != null) {
-            ref.child("members").child(uid).removeValue()
+
+            return
+        }
+
+        if (uid == null) {
+            cleanupLocalSession()
+            onComplete?.invoke(false, "Firebase authentication is missing")
+            return
+        }
+
+        cancelDisconnectCleanup(ref, uid, false) {
+            cleanupLocalSession()
+
+            ref.child("signals").child(uid).removeValue()
                 .addOnSuccessListener {
-                    ref.child("signals").child(uid).removeValue()
+                    ref.child("members").child(uid).removeValue()
                         .addOnSuccessListener {
-                            Log.d(TAG, "Participant left the session")
                             onComplete?.invoke(true, null)
                         }
                         .addOnFailureListener { error ->
-                            Log.e(TAG, "Could not remove participant signals", error)
-                            onComplete?.invoke(
-                                false,
-                                error.message ?: "Could not remove participant signals"
-                            )
+                            Log.e(TAG, "Could not remove participant from session", error)
+                            onComplete?.invoke(false, error.message ?: "Could not leave session")
                         }
                 }
                 .addOnFailureListener { error ->
-                    Log.e(TAG, "Could not remove participant from session", error)
-                    onComplete?.invoke(
-                        false,
-                        error.message ?: "Could not leave session"
-                    )
+                    Log.e(TAG, "Could not remove participant signals", error)
+                    onComplete?.invoke(false, error.message ?: "Could not remove participant signals")
                 }
-        } else {
-            onComplete?.invoke(false, "Firebase authentication is missing")
         }
     }
 
     fun shutdown() {
-        leaveSession()
-        factory?.dispose()
-        factory = null
-        Log.d(TAG, "Multiplayer manager shutdown")
+        leaveSession { _, _ ->
+            try {
+                peerCloseExecutor.execute {
+                    try {
+                        factory?.dispose()
+                        factory = null
+                    } catch (e: Exception) {
+                        Log.e(TAG, "WebRTC factory disposal failed", e)
+                    } finally {
+                        peerCloseExecutor.shutdown()
+                    }
+                }
+            } catch (e: RejectedExecutionException) {
+                Log.e(TAG, "Could not schedule WebRTC factory disposal", e)
+            }
+        }
     }
 
     open class SdpObserverAdapter : SdpObserver {
