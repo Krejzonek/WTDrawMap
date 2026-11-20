@@ -10,6 +10,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.text.InputFilter
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
@@ -39,6 +40,8 @@ class MainActivity : AppCompatActivity() {
         private const val UPDATE_INTERVAL = 500L
         private const val MIN_ZOOM = 1f
         private const val MAX_ZOOM = 5f
+        private const val MAX_NICK_LENGTH = 20
+        private const val MAX_LEGEND_DESCRIPTION_LENGTH = 40
     }
 
     private lateinit var image: ImageView
@@ -104,7 +107,12 @@ class MainActivity : AppCompatActivity() {
     private var deviceSelectionDialogShowing = false
 
     private val isHost by lazy { intent.getBooleanExtra("SESSION_HOST", true) }
-    private val username by lazy { intent.getStringExtra("USERNAME") ?: "User" }
+    private val username by lazy {
+        (intent.getStringExtra("USERNAME") ?: "User")
+            .trim()
+            .take(MAX_NICK_LENGTH)
+            .ifBlank { "User" }
+    }
     private val sessionCode by lazy { intent.getStringExtra("SESSION_CODE") ?: "" }
 
     private val createPngDocument =
@@ -128,6 +136,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         initializeViews()
+
+        val suppliedUsername = intent.getStringExtra("USERNAME") ?: "User"
+        if (suppliedUsername.trim().length > MAX_NICK_LENGTH) {
+            ToastMessage("Nickname is too long. Maximum length is $MAX_NICK_LENGTH characters.")
+        }
+
         initializeSessionMenu()
         initializeMap()
         initializeDrawing()
@@ -623,11 +637,21 @@ class MainActivity : AppCompatActivity() {
         val density = resources.displayMetrics.density
 
         val input = EditText(this).apply {
-            setText(currentDescription)
+            setText(currentDescription.take(MAX_LEGEND_DESCRIPTION_LENGTH))
             hint = "Enter description..."
             setSingleLine(true)
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
+            filters = arrayOf(InputFilter { source, start, end, dest, dstart, dend ->
+                val remaining = MAX_LEGEND_DESCRIPTION_LENGTH - (dest.length - (dend - dstart))
+
+                if (end - start > remaining) {
+                    ToastMessage("Legend description is limited to $MAX_LEGEND_DESCRIPTION_LENGTH characters.")
+                    source.subSequence(start, start + remaining.coerceAtLeast(0))
+                } else {
+                    null
+                }
+            })
             setPadding(
                 (12 * density).toInt(),
                 (12 * density).toInt(),
@@ -647,7 +671,7 @@ class MainActivity : AppCompatActivity() {
 
         val dialog = AlertDialog.Builder(this)
             .setTitle(colorName)
-            .setMessage("Enter your own description for this color.")
+            .setMessage("Enter your own description for this color. Maximum $MAX_LEGEND_DESCRIPTION_LENGTH characters.")
             .setView(layout)
             .setPositiveButton("SAVE", null)
             .setNegativeButton("CANCEL", null)
@@ -760,6 +784,17 @@ class MainActivity : AppCompatActivity() {
                     runOnUiThread {
                         if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
                         returnToHome("Host closed the session", "Host closed the session")
+                    }
+                }
+
+                override fun onConnectionLost() {
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed || isReturningHome) return@runOnUiThread
+
+                        returnToHome(
+                            "Internet connection lost",
+                            "You have been disconnected from the session"
+                        )
                     }
                 }
 

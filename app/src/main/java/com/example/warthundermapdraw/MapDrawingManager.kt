@@ -114,7 +114,6 @@ class MapDrawingManager(private val density: Float) {
         return listOf(
             address,
             info.optInt("map_generation", -1).toString(),
-            info.optInt("hud_type", -1).toString(),
             mapName,
             info.optJSONArray("map_min")?.toString() ?: "",
             info.optJSONArray("map_max")?.toString() ?: ""
@@ -248,7 +247,7 @@ class MapDrawingManager(private val density: Float) {
     fun setColorDescription(color: Int, description: String) {
         if (!canDraw) return
 
-        val cleanDescription = description.trim()
+        val cleanDescription = description.trim().take(40)
         currentLayer.legendDescriptions[color] = cleanDescription
 
         onLocalOperation?.invoke(
@@ -325,7 +324,7 @@ class MapDrawingManager(private val density: Float) {
         val legend = message.optJSONArray("legend") ?: JSONArray()
         for (i in 0 until legend.length()) {
             val entry = legend.optJSONObject(i) ?: continue
-            layer.legendDescriptions[entry.optInt("color")] = entry.optString("description")
+            layer.legendDescriptions[entry.optInt("color")] = entry.optString("description").trim().take(40)
         }
 
         if (mapKey == currentKey) {
@@ -383,7 +382,7 @@ class MapDrawingManager(private val density: Float) {
         val mapKey = message.optString("mapKey", currentKey)
         val layer = layers.getOrPut(mapKey) { DrawingLayer() }
 
-        layer.legendDescriptions[message.optInt("color")] = message.optString("description")
+        layer.legendDescriptions[message.optInt("color")] = message.optString("description").trim().take(40)
         if (mapKey == currentKey) onDrawingChanged?.invoke()
     }
 

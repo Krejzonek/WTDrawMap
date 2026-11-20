@@ -45,6 +45,9 @@ class MultiplayerSessionManager(
     private val peerCloseExecutor = Executors.newSingleThreadExecutor()
     private val peerCloseLock = Any()
     private val closingPeers = ConcurrentHashMap.newKeySet<String>()
+    private var connectionListener: ValueEventListener? = null
+    @Volatile
+    private var hasSeenFirebaseConnection = false
 
     interface Listener {
         fun onStatus(message: String)
@@ -60,6 +63,7 @@ class MultiplayerSessionManager(
         fun onDrawingChannelReady(uid: String) {}
         fun onDrawingPermissionChanged(allowed: Boolean) {}
         fun onRemovedFromSession(reason: String) {}
+        fun onConnectionLost() {}
     }
 
     companion object {
@@ -204,7 +208,8 @@ class MultiplayerSessionManager(
         }
 
         isClosed = false
-        createUniqueCode(0, username)
+        val cleanUsername = username.trim().take(20).ifEmpty { "User" }
+        createUniqueCode(0, cleanUsername)
     }
 
     private fun cancelParticipantDisconnectCleanup(
@@ -222,23 +227,12 @@ class MultiplayerSessionManager(
     }
 
     private fun registerHostDisconnectCleanup(ref: DatabaseReference) {
-        ref.child("active").onDisconnect().setValue(false)
+        ref.onDisconnect().removeValue()
             .addOnSuccessListener {
-                ref.child("members").onDisconnect().removeValue()
-                    .addOnSuccessListener {
-                        ref.child("signals").onDisconnect().removeValue()
-                            .addOnFailureListener { error ->
-                                Log.e(TAG, "Could not register signals cleanup", error)
-                                listener.onError("Could not register automatic signals cleanup: ${error.message}")
-                            }
-                    }
-                    .addOnFailureListener { error ->
-                        Log.e(TAG, "Could not register members cleanup", error)
-                        listener.onError("Could not register automatic members cleanup: ${error.message}")
-                    }
+                Log.d(TAG, "Automatic host disconnect cleanup registered")
             }
             .addOnFailureListener { error ->
-                Log.e(TAG, "Could not register active cleanup", error)
+                Log.e(TAG, "Could not register host disconnect cleanup", error)
                 listener.onError("Could not register automatic session cleanup: ${error.message}")
             }
     }
@@ -262,6 +256,38 @@ class MultiplayerSessionManager(
             }
     }
 
+    private fun listenForFirebaseConnection() {
+        val ref = database.child(".info").child("connected")
+
+        connectionListener?.let { ref.removeEventListener(it) }
+        hasSeenFirebaseConnection = false
+
+        val valueListener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val connected = snapshot.getValue(Boolean::class.java) ?: false
+
+                if (connected) {
+                    hasSeenFirebaseConnection = true
+                    return
+                }
+
+                if (!hasSeenFirebaseConnection || isClosed || sessionCode == null) return
+
+                Log.w(TAG, "Firebase connection lost")
+                isClosed = true
+                cleanupLocalSession()
+                listener.onConnectionLost()
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                Log.e(TAG, "Firebase connection listener cancelled", error.toException())
+            }
+        }
+
+        connectionListener = valueListener
+        ref.addValueEventListener(valueListener)
+    }
+
     private fun cancelDisconnectCleanup(
         ref: DatabaseReference,
         uid: String?,
@@ -269,15 +295,9 @@ class MultiplayerSessionManager(
         onComplete: () -> Unit
     ) {
         if (wasHost) {
-            ref.child("active").onDisconnect().cancel()
+            ref.onDisconnect().cancel()
                 .addOnCompleteListener {
-                    ref.child("members").onDisconnect().cancel()
-                        .addOnCompleteListener {
-                            ref.child("signals").onDisconnect().cancel()
-                                .addOnCompleteListener {
-                                    onComplete()
-                                }
-                        }
+                    onComplete()
                 }
         } else if (uid != null) {
             ref.child("signals").child(uid).onDisconnect().cancel()
@@ -350,6 +370,7 @@ class MultiplayerSessionManager(
                 roomRef = ref
                 isHost = true
 
+                listenForFirebaseConnection()
                 registerHostDisconnectCleanup(ref)
 
                 listenForMembers()
@@ -396,7 +417,7 @@ class MultiplayerSessionManager(
 
             memberRef.setValue(
                 mapOf(
-                    "name" to username,
+                    "name" to username.trim().take(20).ifEmpty { "User" },
                     "host" to false,
                     "canDraw" to false
                 )
@@ -466,6 +487,8 @@ class MultiplayerSessionManager(
                                     sessionCode = code
                                     roomRef = ref
                                     isHost = false
+
+                                    listenForFirebaseConnection()
 
                                     listener.onStatus("Joining session...")
                                     listenForParticipants()
@@ -764,8 +787,9 @@ class MultiplayerSessionManager(
         val valueListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 if (isClosed || isHost) return
+                if (!snapshot.exists()) return
 
-                val active = snapshot.getValue(Boolean::class.java) ?: false
+                val active = snapshot.getValue(Boolean::class.java) ?: return
                 if (active) return
 
                 isClosed = true
@@ -1824,6 +1848,12 @@ class MultiplayerSessionManager(
     private fun cleanupLocalSession() {
         val ref = roomRef
 
+        connectionListener?.let {
+            database.child(".info").child("connected").removeEventListener(it)
+        }
+        connectionListener = null
+        hasSeenFirebaseConnection = false
+
         membersListener?.let {
             ref?.child("members")?.removeEventListener(it)
         }
@@ -1906,27 +1936,29 @@ class MultiplayerSessionManager(
         }
 
         if (wasHost) {
-            fun removeRoom() {
-                cleanupLocalSession()
+            cancelDisconnectCleanup(ref, uid, true) {
+                fun removeRoom() {
+                    cleanupLocalSession()
 
-                ref.removeValue()
+                    ref.removeValue()
+                        .addOnSuccessListener {
+                            onComplete?.invoke(true, null)
+                        }
+                        .addOnFailureListener { error ->
+                            Log.e(TAG, "Could not remove session", error)
+                            onComplete?.invoke(false, error.message ?: "Could not remove session")
+                        }
+                }
+
+                ref.child("active").setValue(false)
                     .addOnSuccessListener {
-                        onComplete?.invoke(true, null)
+                        removeRoom()
                     }
                     .addOnFailureListener { error ->
-                        Log.e(TAG, "Could not remove session", error)
-                        onComplete?.invoke(false, error.message ?: "Could not remove session")
+                        Log.e(TAG, "Could not deactivate session", error)
+                        removeRoom()
                     }
             }
-
-            ref.child("active").setValue(false)
-                .addOnSuccessListener {
-                    removeRoom()
-                }
-                .addOnFailureListener { error ->
-                    Log.e(TAG, "Could not deactivate session", error)
-                    removeRoom()
-                }
 
             return
         }
