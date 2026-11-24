@@ -1,5 +1,7 @@
 # WarThunderMapDraw
 
+> **AI Usage & Acknowledgements:** AI tools were used to assist with the creation of the application icon and the visual design of selected user interface elements. The application functionality, architecture, and integration were developed by the project author.
+
 An open-source Android tactical map companion for **War Thunder**.
 
 WarThunderMapDraw reads battlefield information from the game's built-in local HTTP telemetry interface (`port 8111`) and allows players to share tactical maps, markers, and drawings in real time using **WebRTC peer-to-peer connections**.
