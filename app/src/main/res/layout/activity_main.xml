@@ -79,34 +79,12 @@
                 android:letterSpacing="0.06"
                 android:contentDescription="Change War Thunder device" />
 
-            <View
-                android:layout_width="1dp"
-                android:layout_height="26dp"
-                android:layout_marginStart="5dp"
-                android:background="#29394C" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:text="LIVE"
-                android:textColor="#72D69B"
-                android:textSize="10sp"
-                android:textStyle="bold"
-                android:letterSpacing="0.08" />
-
-            <View
-                android:layout_width="6dp"
-                android:layout_height="6dp"
-                android:layout_marginStart="6dp"
-                android:background="#72D69B" />
-
         </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="44dp"
-            android:layout_marginStart="10dp"
+            android:layout_marginStart="5dp"
             android:layout_marginTop="8dp"
             android:layout_marginEnd="10dp"
             android:gravity="center_vertical"
@@ -114,11 +92,6 @@
             android:paddingStart="12dp"
             android:paddingEnd="7dp"
             android:background="#151F2D">
-
-            <View
-                android:layout_width="6dp"
-                android:layout_height="6dp"
-                android:background="#E5A84B" />
 
             <TextView
                 android:id="@+id/ConnectionStatus"
